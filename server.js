@@ -896,125 +896,161 @@ app.post('/modder/test-in-melee/:modFilename', express.json({ limit: '4kb' }), (
     testJobs[jobId] = { status: 'starting', ts: Date.now(), mod: modName, char_slot: charSlot };
     res.json({ ok: true, job_id: jobId, mod: modName, char_slot: charSlot });
 
-    const workDir = path.join(dirs.mods, 'match-' + jobId);
+    // workDir sits under dirs.mods so it's already served via /public/mods
+    const workDir = path.join(dirs.mods, jobId);
     fs.mkdirSync(workDir, { recursive: true });
     const patchedIso = path.join(workDir, 'melee_TM_patched.iso');
     const shotDir    = path.join(workDir, 'shots');
     fs.mkdirSync(shotDir, { recursive: true });
 
-    // Step 1: wit patches the ISO by replacing files/<charSlot>.dat inside the ISO's filesystem.
-    log('test-in-melee', 'job=' + jobId + ' step=wit-patch slot=' + charSlot);
-    testJobs[jobId].status = 'wit-patch';
+    // Step 1: direct GameCube FST patch — copies TM.iso and rewrites the
+    // <charSlot>.dat entry in place. wit's EXTRACT+COPY rebuild silently
+    // produces Wii-format output on GC discs, so we bypass it with a
+    // small Python helper that parses the FST directly.
+    log('test-in-melee', 'job=' + jobId + ' step=gc-patch slot=' + charSlot);
+    testJobs[jobId].status = 'patching-iso';
     const { execFile, spawn } = require('child_process');
-    execFile(WIT, ['EDIT', TM_ISO_PATH, '--dest', patchedIso, '--overwrite',
-                   '--add-files', charSlot + '.dat=' + modPath], { timeout: 120000, maxBuffer: 8*1024*1024 },
-        (wErr, wOut, wErr2) => {
-            // Note: wit's syntax for replacing files inside an ISO is via COPY/EDIT
-            // + --add-files. If that syntax doesn't match your wit version, we
-            // fall back to explicit extract/replace/rebuild below.
-            if (wErr || !fs.existsSync(patchedIso)) {
-                log('test-in-melee', 'job=' + jobId + ' wit EDIT failed, falling back to extract/rebuild: ' + (wErr && wErr.message));
-                // Fallback: EXTRACT -> replace file -> REBUILD (CP)
-                const extractDir = path.join(workDir, 'extracted');
-                execFile(WIT, ['EXTRACT', TM_ISO_PATH, extractDir], { timeout: 180000, maxBuffer: 8*1024*1024 },
-                (eErr, eOut, eErr2) => {
-                    if (eErr) { testJobs[jobId].status = 'error'; testJobs[jobId].err = 'wit EXTRACT: ' + eErr.message; return; }
-                    // Find the char slot .dat under extractDir (usually files/<slot>.dat or DATA/files/<slot>.dat)
-                    const findTarget = (dir) => {
-                        const stack = [dir];
-                        while (stack.length) {
-                            const d = stack.pop();
-                            for (const n of fs.readdirSync(d)) {
-                                const p = path.join(d, n);
-                                const st = fs.statSync(p);
-                                if (st.isDirectory()) stack.push(p);
-                                else if (n.toLowerCase() === charSlot.toLowerCase() + '.dat') return p;
-                            }
-                        }
-                        return null;
-                    };
-                    const target = findTarget(extractDir);
-                    if (!target) { testJobs[jobId].status = 'error'; testJobs[jobId].err = 'could not find ' + charSlot + '.dat in extracted ISO'; return; }
-                    log('test-in-melee', 'job=' + jobId + ' replacing ' + target);
-                    fs.copyFileSync(modPath, target);
-                    execFile(WIT, ['COPY', extractDir, '--DEST', patchedIso, '--overwrite'],
-                        { timeout: 240000, maxBuffer: 8*1024*1024 },
-                        (cErr) => {
-                            if (cErr || !fs.existsSync(patchedIso)) {
-                                testJobs[jobId].status = 'error';
-                                testJobs[jobId].err = 'wit COPY (rebuild): ' + (cErr && cErr.message);
-                                return;
-                            }
-                            runDolphinAndShoot();
-                        });
-                });
+    const GC_PATCH = process.env.GC_PATCH || '/opt/modder-tools/gc-patch.py';
+    execFile('python3', [GC_PATCH, TM_ISO_PATH, patchedIso, charSlot + '.dat', modPath],
+        { timeout: 120000, maxBuffer: 8*1024*1024 },
+        (pErr, pOut, pStderr) => {
+            if (pErr || !fs.existsSync(patchedIso)) {
+                testJobs[jobId].status = 'error';
+                testJobs[jobId].err = 'gc-patch: ' + (pErr && pErr.message) + ' ' + pStderr;
+                log('test-in-melee', 'job=' + jobId + ' PATCH FAIL ' + pStderr);
                 return;
             }
+            log('test-in-melee', 'job=' + jobId + ' gc-patch OK: ' + (pOut.trim().split('\n').slice(-1)[0]));
             runDolphinAndShoot();
         });
 
     function runDolphinAndShoot() {
         testJobs[jobId].status = 'booting-dolphin';
-        log('test-in-melee', 'job=' + jobId + ' step=dolphin boot');
-        const displayN = 90 + Math.floor(Math.random() * 10);   // :90..:99
+        log('test-in-melee', 'job=' + jobId + ' step=xvfb+dolphin boot');
+        // Per-job display :60..:79. Xvfb directly (not xvfb-run) so we can
+        // -ac disable auth and ffmpeg can grab without XAUTHORITY wrangling.
+        const displayN = 60 + Math.floor(Math.random() * 20);
         const displayArg = ':' + displayN;
-        // xvfb-run wraps a command with a fresh Xvfb display so Dolphin can render.
-        // Dolphin flags: --exec to load the ISO, --config to set video backend
-        // and disable audio. -e / --exec runs headless-with-window.
-        const dolphinArgs = [
-            '-a', '-s', '-screen 0 800x600x24',
-            '-e', displayN.toString(),
-            DOLPHIN,
-            '--batch',
-            '--exec=' + patchedIso,
-            '--video_backend=Software',   // Software renderer avoids GPU/DRI headaches on xvfb
-        ];
-        const dol = spawn(XVFB_RUN, dolphinArgs, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            env: Object.assign({}, process.env, { DISPLAY: displayArg }),
-        });
-        let dolStderr = '';
-        dol.stderr.on('data', d => { dolStderr += d.toString(); });
+        try { fs.unlinkSync('/tmp/.X' + displayN + '-lock'); } catch (_) {}
+        // Pipe for scripted GameCube controller input (advance menus)
+        const pipesDir = '/root/.local/share/dolphin-emu/Pipes';
+        fs.mkdirSync(pipesDir, { recursive: true });
+        const pipePath = path.join(pipesDir, 'p1');
+        try { fs.unlinkSync(pipePath); } catch (_) {}
+        require('child_process').execSync('mkfifo ' + pipePath);
 
-        // Wait 15s for boot to reach TM's own menu, then start capturing.
-        // TM boot is ~5s to menu; give it 15s to be safe.
-        // Take 3 screenshots 3s apart via ffmpeg x11grab -> PNG per capture.
+        const xvfb = spawn('Xvfb', [displayArg, '-screen', '0', '800x600x24', '-ac', '+extension', 'GLX', '+extension', 'RANDR'],
+            { stdio: ['ignore', 'pipe', 'pipe'] });
+        xvfb.stderr.on('data', d => log('test-in-melee', 'job=' + jobId + ' xvfb: ' + d.toString().trim().slice(0, 120)));
+
         setTimeout(() => {
-            testJobs[jobId].status = 'capturing';
-            const shots = [];
-            const grabOne = (i, doneCb) => {
-                const out = path.join(shotDir, 'shot-' + (i+1) + '.png');
-                execFile(FFMPEG, ['-y', '-loglevel', 'error',
-                    '-f', 'x11grab', '-video_size', '800x600',
-                    '-i', displayArg, '-frames:v', '1', out],
-                    { timeout: 15000 }, (fErr) => {
-                        if (!fErr && fs.existsSync(out)) {
-                            shots.push(out);
-                            log('test-in-melee', 'job=' + jobId + ' shot ' + (i+1) + ' captured');
-                        } else {
-                            log('test-in-melee', 'job=' + jobId + ' shot ' + (i+1) + ' FAIL ' + (fErr && fErr.message));
-                        }
-                        doneCb();
-                    });
-            };
-            const grabAll = (i) => {
-                if (i >= 3) {
-                    dol.kill('SIGTERM');
-                    setTimeout(() => dol.kill('SIGKILL'), 3000);
-                    // Publish shots under /public/mods/match-<jobId>/*
-                    testJobs[jobId].status = 'done';
-                    testJobs[jobId].shot_urls = shots.map(s =>
-                        '/public/mods/match-' + jobId + '/shots/' + path.basename(s));
-                    log('test-in-melee', 'job=' + jobId + ' DONE ' + shots.length + ' shots');
-                    return;
-                }
-                grabOne(i, () => setTimeout(() => grabAll(i+1), 3000));
-            };
-            grabAll(0);
-        }, 15000);
+            // LD_PRELOAD our shim so shm_open -> memfd_create (works around
+            // Docker's 64 MB /dev/shm cap that would SIGBUS Dolphin's arena).
+            const dolEnv = Object.assign({}, process.env, {
+                DISPLAY: displayArg,
+                LD_PRELOAD: '/opt/modder-tools/shm_to_memfd.so',
+            });
+            const dol = spawn(DOLPHIN, ['-p', 'x11', '-v', 'Software', '-e', patchedIso],
+                { stdio: ['ignore', 'pipe', 'pipe'], env: dolEnv });
+            dol.stderr.on('data', d => {
+                const s = d.toString().trim();
+                if (s && !/^ALSA lib|snd_/i.test(s)) log('test-in-melee', 'job=' + jobId + ' dolphin: ' + s.slice(0, 200));
+            });
+            dol.on('exit', code => log('test-in-melee', 'job=' + jobId + ' dolphin exit ' + code));
 
-        // Safety kill in case Dolphin hangs.
-        setTimeout(() => { try { dol.kill('SIGKILL'); } catch (_) {} }, 90000);
+            const cleanup = () => {
+                try { dol.kill('SIGTERM'); } catch (_) {}
+                setTimeout(() => { try { dol.kill('SIGKILL'); } catch (_) {} }, 2000);
+                setTimeout(() => { try { xvfb.kill('SIGKILL'); } catch (_) {} }, 3000);
+                setTimeout(() => { try { fs.unlinkSync(pipePath); } catch (_) {} }, 4000);
+            };
+
+            // 5s in: reposition dolphin window to (0,0) so ffmpeg's 800x600 grab
+            // captures the whole render. xdotool -sync waits for the event.
+            setTimeout(() => {
+                try {
+                    const { execSync } = require('child_process');
+                    const wid = execSync('DISPLAY=' + displayArg + ' xdotool search --name "Dolphin" | head -1',
+                        { encoding: 'utf8' }).trim();
+                    if (/^\d+$/.test(wid)) {
+                        execSync('DISPLAY=' + displayArg + ' xdotool windowmove ' + wid + ' 0 0');
+                        execSync('DISPLAY=' + displayArg + ' xdotool windowsize ' + wid + ' 800 600');
+                        log('test-in-melee', 'job=' + jobId + ' window ' + wid + ' repositioned');
+                    }
+                } catch (e) { log('test-in-melee', 'job=' + jobId + ' xdotool skip: ' + e.message.slice(0, 100)); }
+            }, 5000);
+
+            // 6s in: feed input to dismiss memcard dialogs (A x3) so game reaches
+            // the CSS or attract-mode gameplay. Extra A presses are harmless.
+            setTimeout(() => {
+                testJobs[jobId].status = 'sending-input';
+                const script =
+                    'PRESS A\nRELEASE A\n' +
+                    // 4 more As for possible subsequent dialogs
+                    (['PRESS A\nRELEASE A\n'].join('').repeat(0)) +
+                    'PRESS A\nRELEASE A\n' +
+                    'PRESS A\nRELEASE A\n' +
+                    'PRESS A\nRELEASE A\n';
+                // Write to pipe non-blocking. Use fs.createWriteStream so partial writes are OK.
+                try {
+                    const w = fs.createWriteStream(pipePath, { flags: 'a' });
+                    // Space out button presses ~1s apart
+                    const buttons = ['A','A','A','A'];
+                    let i = 0;
+                    const next = () => {
+                        if (i >= buttons.length) { try { w.end(); } catch(_){} return; }
+                        try {
+                            w.write('PRESS ' + buttons[i] + '\n');
+                            setTimeout(() => { try { w.write('RELEASE ' + buttons[i] + '\n'); } catch(_){} i++; setTimeout(next, 1200); }, 150);
+                        } catch(_) {}
+                    };
+                    next();
+                } catch (e) { log('test-in-melee', 'job=' + jobId + ' pipe write err: ' + e.message); }
+            }, 6000);
+
+            // Capture 3 shots ~3s apart, starting after game has time to advance
+            // through dialogs. Because attract-mode timing is game-driven, later
+            // shots may catch demo gameplay.
+            const startAt = parseInt((req.body && req.body.capture_start_s) || 12, 10);
+            const shotIntervalS = parseInt((req.body && req.body.capture_interval_s) || 3, 10);
+            const shotCount = parseInt((req.body && req.body.capture_count) || 3, 10);
+
+            setTimeout(() => {
+                testJobs[jobId].status = 'capturing';
+                const shots = [];
+                const grabOne = (i, cb) => {
+                    const out = path.join(shotDir, 'shot-' + (i+1) + '.png');
+                    execFile(FFMPEG, ['-y', '-loglevel', 'error',
+                        '-f', 'x11grab', '-video_size', '800x600', '-i', displayArg,
+                        '-frames:v', '1', '-update', '1', out],
+                        { timeout: 15000, env: Object.assign({}, process.env, { DISPLAY: displayArg }) },
+                        (fErr, fOut, fStderr) => {
+                            if (!fErr && fs.existsSync(out) && fs.statSync(out).size > 500) {
+                                shots.push(out);
+                                log('test-in-melee', 'job=' + jobId + ' shot ' + (i+1) + ' captured ' + fs.statSync(out).size + 'B');
+                            } else {
+                                log('test-in-melee', 'job=' + jobId + ' shot ' + (i+1) + ' FAIL ' + (fErr && fErr.message));
+                            }
+                            cb();
+                        });
+                };
+                const grabAll = (i) => {
+                    if (i >= shotCount) {
+                        cleanup();
+                        testJobs[jobId].status = 'done';
+                        testJobs[jobId].shot_urls = shots.map(s =>
+                            (CFG.publicBase.replace(/\/$/, '')) + '/public/mods/' + jobId + '/shots/' + path.basename(s));
+                        log('test-in-melee', 'job=' + jobId + ' DONE ' + shots.length + ' shots');
+                        return;
+                    }
+                    grabOne(i, () => setTimeout(() => grabAll(i+1), shotIntervalS * 1000));
+                };
+                grabAll(0);
+            }, startAt * 1000);
+
+            // Safety kill in case Dolphin hangs
+            setTimeout(cleanup, 90000);
+        }, 1500);
     }
 });
 app.get('/modder/test-in-melee/:jobId', (req, res) => {
