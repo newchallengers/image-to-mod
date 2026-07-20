@@ -187,7 +187,12 @@
            extends all the way to the right edge instead of clipping
            at 1000px. */
         @media (min-width: 801px) {
-            .game-container { max-width: none; margin: 0; padding: 8px 24px 8px 32px; }
+            /* Drop the width cap so the canvas can extend to the right edge,
+               but preserve the menu's original left position via a padding
+               that matches where a 1000-px-centered box's left edge would
+               have landed. Formula: (viewport - 1000)/2 + 16px inner pad. */
+            .game-container { max-width: none; margin: 0;
+                              padding: 8px 24px 8px max(16px, calc(50vw - 484px)); }
             .menu       { flex: 0 0 300px; gap: 22px; padding-right: 20px; }
             .btn        { width: 280px; font-size: 1.7rem; padding: 18px 18px; letter-spacing: 3px; border-width: 4px; }
             .step-label { width: 280px; font-size: 2.1rem; letter-spacing: 4px; padding-left: 0; text-align: center; }

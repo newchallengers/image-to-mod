@@ -10,13 +10,13 @@ package-lock.json
 .env
 .env.local
 
-# User uploads / server storage
-/server/uploads/
-/server/base-dats/
-/server/isos/
-/server/mods/
-/server/logs/
-/server/state/
+# User uploads / server storage (whatever STORAGE_ROOT points at)
+uploads/
+base-dats/
+isos/
+mods/
+logs/
+state/
 
 # HSDLib submodule (users clone Ploaj/HSDLib themselves)
 /hsdcli/HSDRaw.dll

@@ -47,8 +47,8 @@ End-to-end from HTTP POST to downloadable `.DAT`: **~3.7 seconds**
 ## Repository layout
 
 ```
-/frontend/modder.html        the single-file UI (three.js, Mario BG, drag-rotate)
-/server/modder.js            standalone Express backend, ~470 lines
+frontend.html                the single-file UI (three.js, Mario BG, drag-rotate)
+server.js                    standalone Express backend, ~470 lines
 /blender/splice.py           headless Blender script — Data Transfer + decimate
 /hsdcli/HSDCli.cs            C# CLI wrapping HSDRaw + IONET
 /hsdcli/HSDCli.csproj
@@ -82,10 +82,10 @@ cd /path/to/image-to-mod/hsdcli
 dotnet build -c Release   # emits bin/Release/net8.0/hsdcli.dll
 
 # 3. Node deps for the server
-cd /path/to/image-to-mod/server
+cd /path/to/image-to-mod
 npm install express axios
 
-# 4. Put your API keys somewhere modder.js can read them
+# 4. Put your API keys somewhere server.js can read them
 mkdir -p ~/.config
 echo YOUR_MESHY_TOKEN  > ~/.config/modder-meshy.key
 echo YOUR_GEMINI_KEY   > ~/.config/modder-gemini.key
@@ -101,12 +101,12 @@ STORAGE_ROOT=/var/lib/modder \
 BLENDER_SCRIPT=/path/to/image-to-mod/blender/splice.py \
 HSDCLI_DLL=/path/to/image-to-mod/hsdcli/bin/Release/net8.0/hsdcli.dll \
 PUBLIC_BASE_URL=https://your.example.com \
-node server/modder.js
+node server.js
 ```
 
 Or wire it up to `supervisord` / `systemd` for auto-restart.
 
-`modder.html` calls a backend at `const API = 'https://your.example.com/api-modder'`
+`frontend.html` calls a backend at `const API = 'https://your.example.com/api-modder'`
 by default. You can override at runtime with `?api=http://localhost:3010`.
 
 ## HTTP API
