@@ -1,0 +1,77 @@
+MIT License
+
+Copyright (c) 2026 newchallengers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+Third-party attribution
+===============================================================================
+
+This project includes and depends on the following third-party components. It
+is your responsibility as a user or contributor to comply with their licenses.
+
+--------------------------------------------------------------------------------
+Ploaj/HSDLib  (HSDRaw + HSDRawViewer)
+--------------------------------------------------------------------------------
+Source: https://github.com/Ploaj/HSDLib
+License: MIT
+
+Files in `hsdcli/hsdlib_import/` are adapted from HSDRawViewer.IO and
+HSDRawViewer.Extensions. Windows-forms references were stripped so the code
+builds on headless Linux. Original copyright:
+
+    HSDRaw, HSDRawViewer
+    Copyright (c) Ploaj  https://github.com/Ploaj
+
+Full HSDLib LICENSE at:
+    https://github.com/Ploaj/HSDLib/blob/master/LICENSE
+
+--------------------------------------------------------------------------------
+IONET  (bundled binary at runtime, referenced but not shipped)
+--------------------------------------------------------------------------------
+Source: https://github.com/Ploaj/IONET
+License: MIT
+The `hsdcli/HSDCli.csproj` references `IONET.dll` from a local build of the
+Ploaj/HSDLib repository. Users must clone and build HSDLib themselves to
+produce the DLL — see README `Building` section.
+
+--------------------------------------------------------------------------------
+Blender
+--------------------------------------------------------------------------------
+https://www.blender.org — GPL. Used as an external tool via subprocess; no
+Blender source is included in this repository.
+
+--------------------------------------------------------------------------------
+Third-party services (external APIs, no code included)
+--------------------------------------------------------------------------------
+Meshy AI       https://meshy.ai       (image-to-3d + rigging)
+Google Gemini  https://ai.google.dev  (nano-banana image model)
+
+===============================================================================
+COPYRIGHT POLICY FOR USER CONTENT
+===============================================================================
+
+Users MUST upload their own base .DAT (extracted from their own legally-owned
+copy of Super Smash Bros. Melee) and their own game ISO. No Nintendo/HAL
+copyrighted assets are shipped with this software. Uploads are stored under
+SHA-256-hashed identifiers and are never publicly listed.
+
+Super Smash Bros. Melee is © 2001 HAL Laboratory / Nintendo. This project has
+no affiliation with, or endorsement from, HAL, Nintendo, or Ploaj.

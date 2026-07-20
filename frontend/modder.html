@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>IMAGE TO MOD</title>
+    <!-- Red game controller favicon — generic 6th-gen console silhouette
+         (rounded body with wing grips, D-pad, 4 colorful action buttons,
+         L/R shoulders on top). No IP marks. Reads as "video game" from
+         16 px favicon size all the way up. -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='body' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%23ff4d4d'/%3E%3Cstop offset='60%25' stop-color='%23d81b1b'/%3E%3Cstop offset='100%25' stop-color='%238a0000'/%3E%3C/linearGradient%3E%3C/defs%3E%3C!-- shoulder bumpers --%3E%3Crect x='16' y='24' width='18' height='6' rx='3' fill='%23222' stroke='%23000' stroke-width='1.6'/%3E%3Crect x='66' y='24' width='18' height='6' rx='3' fill='%23222' stroke='%23000' stroke-width='1.6'/%3E%3C!-- body: rounded rect with wing grips --%3E%3Cpath d='M 22 32 Q 4 34 8 62 Q 12 82 30 82 Q 40 82 50 74 Q 60 82 70 82 Q 88 82 92 62 Q 96 34 78 32 Z' fill='url(%23body)' stroke='%23000' stroke-width='2.4'/%3E%3C!-- D-pad (black cross) --%3E%3Crect x='22' y='50' width='16' height='6' rx='1.4' fill='%23111'/%3E%3Crect x='27' y='45' width='6' height='16' rx='1.4' fill='%23111'/%3E%3Ccircle cx='30' cy='53' r='1.3' fill='%23444'/%3E%3C!-- Right-hand action buttons (Y top yellow, B right blue, A bottom green, X left magenta) --%3E%3Ccircle cx='72' cy='45' r='4' fill='%23ffd83d' stroke='%23000' stroke-width='1.4'/%3E%3Ccircle cx='80' cy='53' r='4' fill='%2338b6ff' stroke='%23000' stroke-width='1.4'/%3E%3Ccircle cx='72' cy='61' r='4' fill='%2338c94a' stroke='%23000' stroke-width='1.4'/%3E%3Ccircle cx='64' cy='53' r='4' fill='%23ff43c9' stroke='%23000' stroke-width='1.4'/%3E%3C!-- Start/Select pills in the middle --%3E%3Crect x='44' y='42' width='12' height='4' rx='2' fill='%23f5f5f5' stroke='%23000' stroke-width='1.2'/%3E%3Crect x='44' y='50' width='12' height='4' rx='2' fill='%23f5f5f5' stroke='%23000' stroke-width='1.2'/%3E%3C/svg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+    <style>
+        html, body {
+            margin: 0; padding: 0;
+            width: 100vw; height: 100dvh;
+            overflow: hidden; overscroll-behavior: none;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #4ec0ff;
+        }
+        /* Mario-style sky + grass BG, drawn on a fixed canvas beneath everything. */
+        #bg-canvas {
+            position: fixed; inset: 0;
+            width: 100vw; height: 100dvh;
+            z-index: 0; display: block;
+        }
+        #app-layout {
+            position: fixed; inset: 0;
+            display: flex; flex-direction: column;
+            z-index: 2; pointer-events: none;
+        }
+        h1.mod-title {
+            text-align: center;
+            color: #fff;
+            font-family: 'Anton', system-ui, sans-serif;
+            font-size: clamp(3rem, 10vw, 5rem);
+            line-height: 1;
+            margin: 16px 0 6px 0;
+            /* Same neon shadow stack /dancer's DANCING ME uses, but with
+               its purple/magenta swapped for red — matches the controller
+               favicon + Mario-red theme. Cyan outer-glow kept for pop. */
+            text-shadow: 0 4px 0 #d81b1b, 0 0 15px #ff3d3d, 0 0 30px #00ffff;
+            letter-spacing: 4px;
+            transform: perspective(400px) rotateX(10deg);
+            transition: text-shadow 0.15s ease, transform 0.15s ease;
+            pointer-events: auto;
+            cursor: pointer;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        h1.mod-title:hover {
+            text-shadow: 0 4px 0 #ff3d3d, 0 0 22px #ff3d3d, 0 0 40px #00ffff;
+        }
+        h1.mod-title:active {
+            transform: perspective(400px) rotateX(10deg) scale(0.97);
+        }
+        .game-container {
+            display: flex; flex-direction: row;
+            flex: 1;
+            width: 100%; max-width: 1000px;
+            margin: 0 auto;
+            position: relative;
+            padding: 8px 16px;
+            box-sizing: border-box;
+            align-items: center;
+            gap: 0;
+            min-height: 0;
+        }
+        .menu {
+            position: relative;
+            z-index: 2;
+            display: flex; flex-direction: column;
+            justify-content: center;
+            align-items: flex-start;
+            padding-right: 12px;
+            gap: 14px;
+            pointer-events: auto;
+            flex: 0 0 auto;
+        }
+        .btn {
+            position: relative;
+            border: 3px solid #fff;
+            background: linear-gradient(180deg, #ff6b34 0%, #d43800 100%);
+            color: #fff;
+            font-family: 'Impact', 'Anton', system-ui, sans-serif;
+            font-size: 1.1rem;
+            padding: 8px 14px;
+            width: 160px;
+            text-align: center;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: transform 0.08s ease, box-shadow 0.08s ease;
+            box-shadow: -4px 4px 0 rgba(0,0,0,.35);
+            font-weight: 900;
+            text-transform: uppercase;
+            user-select: none;
+        }
+        .btn:active { transform: translate(-2px, 2px); box-shadow: -2px 2px 0 rgba(0,0,0,.35); }
+        .btn.pipe   { background: linear-gradient(180deg, #34a34e 0%, #197a2b 100%); }
+        .btn.coin   { background: linear-gradient(180deg, #ffcf3c 0%, #d18f00 100%); color: #4a2900; }
+        .btn:disabled {
+            background: linear-gradient(180deg, #999 0%, #666 100%);
+            cursor: not-allowed;
+            filter: saturate(0.5) brightness(0.85);
+        }
+        /* Attention-grab for the currently-actionable step button —
+           pulsing white glow + a diagonal pointing-hand emoji orbiting
+           the bottom-right corner. Disabled during processing states
+           so we don't nag while the pipeline runs. */
+        @keyframes btn-pulse {
+            0%,100% { transform: scale(1);    box-shadow: -4px 4px 0 rgba(0,0,0,.35), 0 0 0 rgba(255,255,255,0); }
+            50%     { transform: scale(1.09); box-shadow: -4px 4px 0 rgba(0,0,0,.35),
+                                                          0 0 28px rgba(255,255,255,.95),
+                                                          0 0 48px rgba(255,255,255,.55); }
+        }
+        @keyframes hand-bob {
+            0%,100% { transform: scaleX(-1) rotate(-40deg) translate(0, 0); }
+            50%     { transform: scaleX(-1) rotate(-40deg) translate(-6px, -6px); }
+        }
+        .btn.calling-out {
+            position: relative;
+            animation: btn-pulse 1.15s ease-in-out infinite;
+            outline: 2px solid rgba(255,255,255,.75);
+            outline-offset: 3px;
+        }
+        .btn.calling-out::after {
+            content: "👉";
+            position: absolute;
+            bottom: -14px;
+            right: -46px;
+            font-size: 38px;
+            transform-origin: 60% 40%;
+            animation: hand-bob 0.85s ease-in-out infinite;
+            pointer-events: none;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,.5));
+            text-shadow: 0 0 6px rgba(255,255,255,.4);
+        }
+        #canvas-container {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            justify-content: center; align-items: center;
+            z-index: 1;
+            pointer-events: auto;
+            min-width: 0; min-height: 0;
+        }
+        #canvas-container canvas { display: block; width: 100%; height: 100%; }
+        #avatar-loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 5;
+            display: none;
+            flex-direction: column; align-items: center;
+            gap: 12px;
+            pointer-events: none;
+        }
+        #avatar-loading.on { display: flex; }
+        #avatar-loading .spin {
+            width: 54px; height: 54px;
+            border: 5px solid rgba(255,255,255,.35);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: mod-spin 0.9s linear infinite;
+            box-shadow: 0 0 20px rgba(255,255,255,.55);
+        }
+        #avatar-loading .label {
+            font-family: 'Impact', system-ui, sans-serif;
+            font-size: 14px;
+            color: #fff;
+            letter-spacing: 3px;
+            text-shadow: 0 2px 4px rgba(0,0,0,.8);
+            text-transform: uppercase;
+        }
+        @keyframes mod-spin { to { transform: rotate(360deg); } }
+        @media (max-width: 800px) {
+            .menu { flex: 0 0 170px; gap: 10px; }
+            .btn  { width: 156px; font-size: 0.95rem; padding: 7px 10px; }
+            #avatar-loading { left: calc(50% + 75px); }
+        }
+        /* Desktop has tons of room — make the actionable button and its
+           step label BIG so people can't miss what to do next. */
+        @media (min-width: 801px) {
+            .menu       { flex: 0 0 300px; gap: 22px; padding-right: 20px; }
+            .btn        { width: 280px; font-size: 1.7rem; padding: 18px 18px; letter-spacing: 3px; border-width: 4px; }
+            .step-label { width: 280px; font-size: 1.55rem; letter-spacing: 3px; padding-left: 6px; }
+            .btn.calling-out::after { font-size: 56px; bottom: -22px; right: -66px; }
+        }
+        /* Status card at top-center — shows generation phase + progress. */
+        #status-card {
+            position: fixed;
+            top: 60px; left: 50%;
+            transform: translateX(-50%);
+            background: rgba(20, 20, 30, 0.9);
+            color: #fff;
+            padding: 12px 22px;
+            border-radius: 10px;
+            border: 2px solid #fff;
+            font-family: 'Impact', system-ui, sans-serif;
+            font-size: 14px;
+            letter-spacing: 1.5px;
+            display: none;
+            z-index: 20;
+            box-shadow: 0 8px 24px rgba(0,0,0,.35);
+            pointer-events: none;
+            max-width: 380px;
+            text-align: center;
+            white-space: pre-line;
+        }
+        #status-card.on { display: block; }
+        #status-progress {
+            display: block;
+            margin-top: 6px;
+            width: 200px;
+            height: 8px;
+            background: rgba(255,255,255,.15);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #status-progress span {
+            display: block;
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #ffcf3c, #34a34e);
+            transition: width 0.3s ease;
+        }
+        /* Character roster strip — small thumbnails at bottom for chars
+           the user has already rigged this session. Clicking swaps. */
+        #roster {
+            position: fixed;
+            bottom: 10px; left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 6px;
+            z-index: 4;
+            pointer-events: auto;
+        }
+        .roster-thumb {
+            width: 44px; height: 44px;
+            border: 3px solid #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            background: rgba(0,0,0,.5) center/cover;
+            box-shadow: 0 3px 8px rgba(0,0,0,.35);
+        }
+        .roster-thumb.active { border-color: #ffcf3c; }
+        /* Step label above the single step-button. Text-only, no
+           background — the color emphasis lives on the button below. */
+        .step-label {
+            font-family: 'Impact', system-ui, sans-serif;
+            font-weight: 900;
+            color: #fff;
+            font-size: 1.05rem;
+            letter-spacing: 2px;
+            text-align: left;
+            padding-left: 4px;
+            width: 160px;
+            text-transform: uppercase;
+            text-shadow: 0 2px 0 rgba(0,0,0,.5), 0 0 8px rgba(0,0,0,.3);
+        }
+        .step-label.pipe, .step-label.coin, .step-label.done { color: #fff; }
+    </style>
+</head>
+<body>
+    <canvas id="bg-canvas"></canvas>
+    <div id="status-card">
+        <div id="status-text">Working…</div>
+        <div id="status-progress"><span></span></div>
+    </div>
+    <div id="app-layout">
+        <h1 class="mod-title" onclick="window.toggleFullscreen()" title="Toggle fullscreen">IMAGE TO MOD</h1>
+        <div class="game-container">
+            <div class="menu">
+                <div class="step-label" id="step-label">Step 1</div>
+                <button class="btn" id="step-btn" onclick="window.stepAction()">Upload Image</button>
+            </div>
+            <div id="canvas-container">
+                <div id="avatar-loading" aria-live="polite">
+                    <div class="spin"></div>
+                    <div class="label">Loading…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="roster"></div>
+    <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" style="display:none">
+    <input id="dat-input"   type="file" accept=".dat,application/octet-stream"   style="display:none">
+    <input id="iso-input"   type="file" accept=".iso,.rvz,.gcz,application/octet-stream" style="display:none">
+    <div id="dev-iso-status" style="position:fixed;bottom:44px;right:12px;z-index:25;font:11px system-ui;color:#fff;background:rgba(30,30,30,.85);padding:4px 8px;border-radius:4px;display:none;max-width:280px;white-space:pre-wrap;"></div>
+    <div id="dev-iso-btn" onclick="window.uploadDevIso()"
+         style="position:fixed;bottom:12px;right:12px;z-index:25;font:11px system-ui;color:rgba(255,255,255,.9);background:rgba(30,30,30,.75);border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:4px 8px;cursor:pointer;letter-spacing:.5px;box-shadow:0 2px 6px rgba(0,0,0,.4);user-select:none;"
+         title="Dev: upload your own Melee ISO for the in-game test loop">
+        dev: upload Melee ISO
+    </div>
+
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script>
+        /* Point at the standalone modder.js backend. Override with
+           ?api=<origin> during local dev if needed. */
+        const API = new URLSearchParams(location.search).get('api')
+                  || 'https://20sec.app/api-modder';
+
+        /* Frontend-log pipe: every _dbg() line prints to console AND
+           ships to the modder.js log ring buffer via /modder/frontlog,
+           inspectable server-side via /modder/logs. */
+        const _dbgT0 = performance.now();
+        function _dbg(msg) {
+            const line = 'modder: [' + ((performance.now() - _dbgT0) / 1000).toFixed(2) + 's] ' + msg;
+            console.log(line);
+            try {
+                fetch(API + '/modder/frontlog', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ msg: line }),
+                    keepalive: true,
+                }).catch(() => {});
+            } catch (_) {}
+        }
+        window.addEventListener('error', e => {
+            _dbg('WINDOW ERROR: ' + (e && e.message)
+                + ' src=' + (e && e.filename) + ':' + (e && e.lineno));
+        });
+        window.addEventListener('unhandledrejection', e => {
+            _dbg('UNHANDLED REJECTION: ' + (e && e.reason && e.reason.message ? e.reason.message : JSON.stringify(e && e.reason).slice(0, 300)));
+        });
+        _dbg('boot — ua=' + navigator.userAgent + ' vp=' + innerWidth + 'x' + innerHeight
+            + ' devicePixelRatio=' + devicePixelRatio);
+
+        /* ── Mario BG: sky, clouds, grass ─────────────────────────── */
+        (function _drawMarioBG() {
+            const c = document.getElementById('bg-canvas');
+            const ctx = c.getContext('2d');
+            let w, h;
+            const clouds = [];
+            function resize() {
+                w = c.width  = window.innerWidth  * devicePixelRatio;
+                h = c.height = window.innerHeight * devicePixelRatio;
+                c.style.width  = window.innerWidth  + 'px';
+                c.style.height = window.innerHeight + 'px';
+                ctx.setTransform(1,0,0,1,0,0);
+                ctx.scale(devicePixelRatio, devicePixelRatio);
+                if (clouds.length === 0) {
+                    for (let i = 0; i < 7; i++) {
+                        clouds.push({
+                            x: Math.random() * window.innerWidth,
+                            y: 40 + Math.random() * (window.innerHeight * 0.35),
+                            s: 0.6 + Math.random() * 0.9,
+                            vx: 0.08 + Math.random() * 0.12,
+                        });
+                    }
+                }
+            }
+            resize();
+            window.addEventListener('resize', resize);
+
+            function drawCloud(x, y, s) {
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(x,       y, 18 * s, 0, Math.PI * 2);
+                ctx.arc(x + 22*s, y - 8*s, 22 * s, 0, Math.PI * 2);
+                ctx.arc(x + 46*s, y, 18 * s, 0, Math.PI * 2);
+                ctx.arc(x + 30*s, y + 8*s, 20 * s, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            function frame() {
+                const vw = window.innerWidth, vh = window.innerHeight;
+                /* sky gradient */
+                const grad = ctx.createLinearGradient(0, 0, 0, vh * 0.75);
+                grad.addColorStop(0,   '#5cc9ff');
+                grad.addColorStop(1,   '#a5e2ff');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, vw, vh * 0.75);
+                /* grass — bright green */
+                ctx.fillStyle = '#4bc44b';
+                ctx.fillRect(0, vh * 0.75, vw, vh * 0.25);
+                /* dark grass shadow line */
+                ctx.fillStyle = '#2f8a2f';
+                ctx.fillRect(0, vh * 0.75, vw, 4);
+                /* grass tuft pattern */
+                ctx.fillStyle = '#3fa63f';
+                for (let x = 0; x < vw; x += 24) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, vh * 0.75 + 4);
+                    ctx.lineTo(x + 6, vh * 0.75 + 12);
+                    ctx.lineTo(x + 12, vh * 0.75 + 4);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                /* clouds drift */
+                for (const cl of clouds) {
+                    drawCloud(cl.x, cl.y, cl.s);
+                    cl.x += cl.vx;
+                    if (cl.x - 60 > vw) cl.x = -60;
+                }
+                requestAnimationFrame(frame);
+            }
+            frame();
+        })();
+
+        /* ── Three.js scene shared with the /dancer flow's asset layout ── */
+        let scene, camera, renderer, mixer, currentModel;
+        let clock = new THREE.Clock();
+        let sceneReady = false;
+        let currentRigId = null;
+        let currentBaseDatId = null;
+        const _roster = [];
+        /* Auto-spin ON by default and forever, unless the user grabs
+           the character to rotate manually. On pointer-release we wait
+           _AUTOSPIN_RESUME_MS before restarting the smooth spin —
+           gives the user time to inspect the pose they landed on. */
+        let _autoSpin = true;
+        let _autoSpinResumeTimer = 0;
+        const _AUTOSPIN_RESUME_MS = 5000;
+
+        function initScene() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+            camera.position.set(0, 1.5, 10);
+            camera.lookAt(0, 0, 0);
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+            const resize = () => {
+                const w = container.clientWidth, h = container.clientHeight;
+                renderer.setSize(w, h, false);
+                camera.aspect = w / h;
+                camera.updateProjectionMatrix();
+            };
+            container.appendChild(renderer.domElement);
+            resize();
+            window.addEventListener('resize', resize);
+            const amb = new THREE.AmbientLight(0xffffff, 0.9);
+            const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+            dir.position.set(3, 8, 5);
+            scene.add(amb, dir);
+            sceneReady = true;
+            (function tick() {
+                requestAnimationFrame(tick);
+                const dt = clock.getDelta();
+                if (mixer) mixer.update(dt);
+                if (_autoSpin && currentModel) currentModel.rotation.y += 0.005;
+                renderer.render(scene, camera);
+            })();
+            _bindDragRotate();
+            /* Placeholder character while the user hasn't uploaded
+               anything yet — Goku dancing his three Meshy-baked clips.
+               Cached on our own server at /dancer-anims/ so it costs
+               nothing to load and can never 404 later. */
+            _loadPlaceholder();
+        }
+
+        /* Click-and-drag rotate — pointer down on the canvas grabs the
+           avatar; horizontal drag rotates them around the Y (up) axis.
+           Full 360° per viewport-width dragged. If the pointer moves
+           less than ~6 px between down and up, treat as a tap and
+           forward to the placeholder-cycle handler. Ported straight
+           from /dancer's _bindDragRotate. */
+        function _bindDragRotate() {
+            if (!renderer) return;
+            const canvas = renderer.domElement;
+            let dragging = false;
+            let startX = 0, startY = 0;
+            let startRot = 0;
+            let downTs = 0;
+
+            function _pointerX(ev) {
+                if (ev.touches && ev.touches[0]) return ev.touches[0].clientX;
+                if (ev.changedTouches && ev.changedTouches[0]) return ev.changedTouches[0].clientX;
+                return ev.clientX;
+            }
+            function _pointerY(ev) {
+                if (ev.touches && ev.touches[0]) return ev.touches[0].clientY;
+                if (ev.changedTouches && ev.changedTouches[0]) return ev.changedTouches[0].clientY;
+                return ev.clientY;
+            }
+            function down(ev) {
+                if (!currentModel) return;
+                dragging = true;
+                startX = _pointerX(ev);
+                startY = _pointerY(ev);
+                startRot = currentModel.rotation.y;
+                downTs = performance.now();
+                canvas.style.cursor = 'grabbing';
+                /* Freeze auto-spin the moment the user grabs; clear any
+                   pending resume timer from a previous release. */
+                _autoSpin = false;
+                if (_autoSpinResumeTimer) { clearTimeout(_autoSpinResumeTimer); _autoSpinResumeTimer = 0; }
+                try { canvas.setPointerCapture && ev.pointerId != null && canvas.setPointerCapture(ev.pointerId); } catch (_) {}
+                ev.preventDefault && ev.preventDefault();
+            }
+            function move(ev) {
+                if (!dragging || !currentModel) return;
+                const dx = _pointerX(ev) - startX;
+                currentModel.rotation.y = startRot + (dx / window.innerWidth) * Math.PI * 2;
+                ev.preventDefault && ev.preventDefault();
+            }
+            function up(ev) {
+                if (!dragging) return;
+                const dx = Math.abs(_pointerX(ev) - startX);
+                const dy = Math.abs(_pointerY(ev) - startY);
+                const dt = performance.now() - downTs;
+                dragging = false;
+                canvas.style.cursor = 'grab';
+                try { canvas.releasePointerCapture && ev && ev.pointerId != null && canvas.releasePointerCapture(ev.pointerId); } catch (_) {}
+                /* Below the drag-threshold = it's a tap. Trigger the
+                   placeholder-cycle if the placeholder is what's on
+                   screen right now. */
+                if (dx < 6 && dy < 6 && dt < 400) {
+                    if (_placeholderActive) _placeholderCycle();
+                }
+                /* Restart smooth Y-axis spin after a 5-second grace
+                   period so the user can hold their inspection pose. */
+                if (_autoSpinResumeTimer) clearTimeout(_autoSpinResumeTimer);
+                _autoSpinResumeTimer = setTimeout(() => {
+                    _autoSpin = true;
+                    _autoSpinResumeTimer = 0;
+                }, _AUTOSPIN_RESUME_MS);
+            }
+
+            canvas.style.cursor = 'grab';
+            canvas.style.touchAction = 'none';
+            if (window.PointerEvent) {
+                canvas.addEventListener('pointerdown',   down, { passive: false });
+                canvas.addEventListener('pointermove',   move, { passive: false });
+                canvas.addEventListener('pointerup',     up);
+                canvas.addEventListener('pointercancel', up);
+                canvas.addEventListener('pointerleave',  up);
+            } else {
+                canvas.addEventListener('mousedown',  down);
+                canvas.addEventListener('mousemove',  move);
+                canvas.addEventListener('mouseup',    up);
+                canvas.addEventListener('mouseleave', up);
+                canvas.addEventListener('touchstart', down, { passive: false });
+                canvas.addEventListener('touchmove',  move, { passive: false });
+                canvas.addEventListener('touchend',   up);
+                canvas.addEventListener('touchcancel',up);
+            }
+        }
+
+        let _placeholderActive = false;
+
+        /* Skinned-mesh bind-pose bbox is near-zero because the CPU-side
+           vertex positions haven't been through the bone transform yet.
+           Sampling the animation across multiple time points gives us
+           the real animated extent — arms lifted, hip raised, etc. —
+           which is what we need to auto-scale correctly. Ported from
+           /dancer's _computeAvatarBBox. */
+        function _computeAvatarBBox(model, gltfAnimations) {
+            model.updateMatrixWorld(true);
+            let hasSkinned = false;
+            const bones = [];
+            model.traverse(o => {
+                if (o.isSkinnedMesh) hasSkinned = true;
+                if (o.isBone) bones.push(o);
+            });
+            _dbg('bbox: skinned=' + hasSkinned + ' bones=' + bones.length
+                + ' anims=' + (gltfAnimations ? gltfAnimations.length : 0));
+            if (hasSkinned && bones.length) {
+                const box = new THREE.Box3();
+                const p = new THREE.Vector3();
+                const sample = () => {
+                    for (const b of bones) box.expandByPoint(b.getWorldPosition(p));
+                };
+                if (gltfAnimations && gltfAnimations.length) {
+                    const tempMixer = new THREE.AnimationMixer(model);
+                    const clip = gltfAnimations[0];
+                    const action = tempMixer.clipAction(clip);
+                    action.play();
+                    const duration = clip.duration || 1;
+                    const steps = 12;
+                    for (let i = 0; i <= steps; i++) {
+                        tempMixer.setTime((duration * i) / steps);
+                        model.updateMatrixWorld(true);
+                        sample();
+                    }
+                    try { action.stop(); tempMixer.uncacheAction(clip); } catch (_) {}
+                    model.updateMatrixWorld(true);
+                } else {
+                    sample();
+                }
+                box.min.x -= 0.18; box.max.x += 0.18;
+                box.min.y -= 0.05; box.max.y += 0.28;
+                box.min.z -= 0.18; box.max.z += 0.18;
+                return box;
+            }
+            /* Non-skinned fallback — union of geometry bboxes. */
+            const box = new THREE.Box3();
+            const tempBox = new THREE.Box3();
+            let any = false;
+            model.traverse(o => {
+                if ((o.isMesh || o.isSkinnedMesh) && o.geometry) {
+                    if (!o.geometry.boundingBox) {
+                        try { o.geometry.computeBoundingBox(); } catch (_) {}
+                    }
+                    if (o.geometry.boundingBox) {
+                        tempBox.copy(o.geometry.boundingBox);
+                        tempBox.applyMatrix4(o.matrixWorld);
+                        box.union(tempBox);
+                        any = true;
+                    }
+                }
+            });
+            if (!any) box.setFromObject(model);
+            return box;
+        }
+
+        function _frameAvatar(model, gltfAnimations) {
+            const container = document.getElementById('canvas-container');
+            model.position.set(0, 0, 0);
+            model.scale.set(1, 1, 1);
+            model.rotation.set(0, 0, 0);
+            const box = _computeAvatarBBox(model, gltfAnimations);
+            const size = box.getSize(new THREE.Vector3());
+            _dbg('frame raw bbox: size=' + size.x.toFixed(3) + '×' + size.y.toFixed(3) + '×' + size.z.toFixed(3)
+                + ' min y=' + box.min.y.toFixed(3) + ' max y=' + box.max.y.toFixed(3));
+            if (size.x <= 0.0001 || size.y <= 0.0001) {
+                _dbg('frame ABORT — zero-size bbox');
+                return;
+            }
+            const canvasW = Math.max(1, container.clientWidth);
+            const canvasH = Math.max(1, container.clientHeight);
+            const aspect = canvasW / canvasH;
+            const camZ = camera.position.z;
+            const fovRad = camera.fov * Math.PI / 180;
+            const visibleH = 2 * camZ * Math.tan(fovRad / 2);
+            const visibleW = visibleH * aspect;
+            _dbg('frame canvas ' + canvasW + '×' + canvasH + ' camZ=' + camZ.toFixed(1)
+                + ' fov=' + camera.fov.toFixed(1) + ' visible=' + visibleW.toFixed(2) + '×' + visibleH.toFixed(2));
+            const marginY = 0.72;
+            const marginX = 0.72;
+            const scaleY = (visibleH * marginY) / size.y;
+            const scaleX = (visibleW * marginX) / size.x;
+            const isPortrait = canvasH / canvasW > 1.4;
+            /* Landscape used min(sX,sY) which under-scales the character
+               because visibleW is generous but character width (arms
+               out) is narrow — sX dominates and picks a tiny scale.
+               Cap scaleX × 1.6 in landscape so we get closer to the
+               visibleH-fill of portrait, still avoiding sideways spill. */
+            const s = isPortrait ? Math.min(scaleY, scaleX * 2.0)
+                                 : Math.min(scaleY, scaleX * 1.6);
+            _dbg('frame scale: sX=' + scaleX.toFixed(3) + ' sY=' + scaleY.toFixed(3)
+                + ' pick=' + s.toFixed(3) + (isPortrait ? ' (portrait)' : ' (landscape)'));
+            model.scale.setScalar(s);
+            const scaledBox = _computeAvatarBBox(model, gltfAnimations);
+            const center = scaledBox.getCenter(new THREE.Vector3());
+            const scaledSize = scaledBox.getSize(new THREE.Vector3());
+            /* Feet planted ON the grass line — the Mario BG paints
+               grass from 75% viewport height, which in world coords
+               is -visibleH * 0.25. Push a touch further to plant
+               firmly on grass instead of at the transition. Same
+               offset on desktop and mobile so both orientations match. */
+            const isPortraitLayout = canvasH / canvasW > 1.4;
+            const feetY = -(visibleH * 0.30);
+            /* Menu offset — half the width on mobile so character
+               lands closer to the horizontal center of the visible
+               column, not way over on the right edge. */
+            const menu = document.querySelector('.menu');
+            const menuPxWidth = menu ? menu.getBoundingClientRect().width : 0;
+            const worldPerPx = visibleW / canvasW;
+            const xOffset = menuPxWidth * worldPerPx * (isPortraitLayout ? 0.55 : 1.0);
+            model.position.set(-center.x + xOffset,
+                                feetY + scaledSize.y * 0.5 - center.y,
+                                -center.z);
+            _dbg('frame FINAL: scaledSize=' + scaledSize.x.toFixed(2) + '×' + scaledSize.y.toFixed(2)
+                + ' menuPx=' + menuPxWidth + ' xOffset=' + xOffset.toFixed(2)
+                + ' feetY=' + feetY.toFixed(2)
+                + ' pos=(' + model.position.x.toFixed(2) + ',' + model.position.y.toFixed(2) + ',' + model.position.z.toFixed(2) + ')');
+        }
+
+        /* Placeholder character has 3 Meshy-baked Goku dances (actions
+           82 = Shake_It_Off, 74 = Gangnam, 591 = Hip_Hop). Tap the
+           character to cycle: dance A → dance B → dance C → freeze
+           → (re-shuffle) → dance A' → ...  4-slot loop, Fisher-Yates
+           reshuffles at every wrap. Freeze = mixer paused. */
+        const _PLACEHOLDER_RIG = '019f7023-9cb8-7e08-aa05-5f628ab1c1f0';
+        const _PLACEHOLDER_ACTIONS = [82, 74, 591];
+        let _placeholderClips  = [];   /* THREE.AnimationClip[] */
+        let _placeholderMixerActions = [];  /* action objects on the current mixer */
+        let _placeholderOrder = [];    /* Fisher-Yates permutation of indices */
+        let _placeholderStep = -1;     /* 0..2 = dancing, 3 = frozen, -1 = fresh */
+
+        function _fisherYates(arr) {
+            const a = arr.slice();
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+        }
+
+        function _loadPlaceholder() {
+            const url0 = 'https://d20.finance/dancer-anims/' + _PLACEHOLDER_RIG + '/' + _PLACEHOLDER_ACTIONS[0] + '.glb';
+            _dbg('placeholder load start ' + url0);
+            /* Spinner up until the mesh is in the scene. */
+            const loadingEl = document.getElementById('avatar-loading');
+            if (loadingEl) loadingEl.classList.add('on');
+            new THREE.GLTFLoader().load(url0, gltf => {
+                _dbg('placeholder GLB fetched anims=' + (gltf.animations || []).length);
+                if (currentRigId) {
+                    _dbg('placeholder skipped — real char already loaded');
+                    if (loadingEl) loadingEl.classList.remove('on');
+                    return;
+                }
+                if (currentModel) scene.remove(currentModel);
+                const model = gltf.scene;
+                _frameAvatar(model, gltf.animations);
+                scene.add(model);
+                currentModel = model;
+                mixer = new THREE.AnimationMixer(model);
+                _placeholderClips = [];
+                _placeholderMixerActions = [];
+                if (gltf.animations && gltf.animations.length) {
+                    _placeholderClips.push(gltf.animations[0]);
+                    const a = mixer.clipAction(gltf.animations[0]);
+                    a.setLoop(THREE.LoopRepeat);
+                    _placeholderMixerActions.push(a);
+                }
+                _placeholderActive = true;
+                _placeholderOrder = _fisherYates([0, 1, 2]);
+                _placeholderStep = 0;
+                if (_placeholderMixerActions[0]) _placeholderMixerActions[0].reset().play();
+                if (loadingEl) loadingEl.classList.remove('on');
+                _dbg('placeholder playing clip 0 = "' + (_placeholderClips[0] && _placeholderClips[0].name) + '"');
+                /* Pre-fetch the other two dance GLBs in the background,
+                   extract their clips, bind them to the same mixer. */
+                for (let i = 1; i < _PLACEHOLDER_ACTIONS.length; i++) {
+                    const u = 'https://d20.finance/dancer-anims/' + _PLACEHOLDER_RIG + '/' + _PLACEHOLDER_ACTIONS[i] + '.glb';
+                    new THREE.GLTFLoader().load(u, g => {
+                        if (!_placeholderActive) return;   /* user replaced with real char */
+                        if (g.animations && g.animations.length) {
+                            _placeholderClips.push(g.animations[0]);
+                            const act = mixer.clipAction(g.animations[0]);
+                            act.setLoop(THREE.LoopRepeat);
+                            _placeholderMixerActions.push(act);
+                            _dbg('placeholder pre-fetched clip ' + i + ' = "' + g.animations[0].name + '"');
+                        }
+                    }, undefined, err => _dbg('placeholder pre-fetch fail act=' + _PLACEHOLDER_ACTIONS[i] + ': ' + (err && err.message)));
+                }
+            }, evt => {
+                if (evt && evt.total) _dbg('placeholder progress ' + evt.loaded + '/' + evt.total);
+            }, err => {
+                _dbg('placeholder LOAD FAIL: ' + (err && err.message ? err.message : String(err)));
+                const el = document.getElementById('avatar-loading');
+                if (el) el.classList.remove('on');
+            });
+        }
+
+        /* Cycle to the next slot in a 4-slot loop: 3 dances then a
+           freeze, then reshuffle + restart. Called on canvas tap. */
+        function _placeholderCycle() {
+            if (!_placeholderActive || !_placeholderMixerActions.length) return;
+            const n = _placeholderMixerActions.length;
+            _placeholderStep = (_placeholderStep + 1) % (n + 1);
+            _dbg('placeholder tap → step ' + _placeholderStep + '/' + (n + 1));
+            /* Stop everything first so only one dance plays at a time. */
+            for (const a of _placeholderMixerActions) { try { a.stop(); } catch (_) {} }
+            if (_placeholderStep === n) {
+                /* Freeze slot — mixer keeps ticking but no action is active,
+                   so character freezes in whatever pose the last frame left. */
+                _dbg('placeholder frozen');
+                return;
+            }
+            /* Wrapped back to slot 0 = reshuffle. */
+            if (_placeholderStep === 0) {
+                _placeholderOrder = _fisherYates(_placeholderOrder.map((_, i) => i).slice(0, n));
+                _dbg('placeholder reshuffled → [' + _placeholderOrder.join(',') + ']');
+            }
+            const clipIdx = _placeholderOrder[_placeholderStep];
+            const act = _placeholderMixerActions[clipIdx];
+            if (act) {
+                act.reset().play();
+                _dbg('placeholder now playing clip ' + clipIdx + ' = "' + (_placeholderClips[clipIdx] && _placeholderClips[clipIdx].name) + '"');
+            }
+        }
+
+        /* ── Status card helpers ─────────────────────────────────── */
+        function status(text, pct) {
+            const card = document.getElementById('status-card');
+            document.getElementById('status-text').textContent = text || '';
+            const bar = document.querySelector('#status-progress span');
+            if (typeof pct === 'number' && bar) bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+            card.classList.add('on');
+        }
+        function statusHide(delayMs) {
+            setTimeout(() => document.getElementById('status-card').classList.remove('on'), delayMs || 800);
+        }
+
+        /* ── Step machine ─────────────────────────────────────────
+           One button. Its label + action rotate through:
+             1. Upload Image       (photo picker → Meshy rigging)
+             2. Upload .DAT File   (base-DAT picker)
+             3. Download Skin      (streams the finished modded .DAT)
+           The step label chip above the button shows "Step N".
+           setStep(n) is the single source of truth for the UI state. */
+        function setStep(n) {
+            const label = document.getElementById('step-label');
+            const btn   = document.getElementById('step-btn');
+            btn.disabled = false;
+            label.classList.remove('pipe', 'coin', 'done');
+            btn.classList.remove('pipe', 'coin', 'calling-out');
+            if (n === 1) {
+                label.textContent = 'Step 1';
+                btn.textContent   = 'Upload Image';
+                btn.classList.add('calling-out');
+            } else if (n === 2) {
+                label.textContent = 'Step 2';
+                label.classList.add('pipe');
+                btn.classList.add('pipe', 'calling-out');
+                btn.textContent   = 'Upload .DAT File';
+            } else if (n === 3) {
+                label.textContent = 'Step 3';
+                label.classList.add('coin');
+                btn.classList.add('coin', 'calling-out');
+                btn.textContent   = 'Build the mod';
+            } else if (n === 'processing') {
+                label.textContent = 'Working…';
+                label.classList.add('done');
+                btn.textContent   = 'Working…';
+                btn.disabled = true;
+                /* No .calling-out while a pipeline stage is running. */
+            }
+        }
+        setStep(1);
+
+        window.stepAction = function () {
+            const btn = document.getElementById('step-btn');
+            const label = document.getElementById('step-label').textContent;
+            if (label === 'Step 1') document.getElementById('photo-input').click();
+            else if (label === 'Step 2') document.getElementById('dat-input').click();
+            else if (label === 'Step 3') window.modProcess();
+        };
+
+        document.getElementById('photo-input').addEventListener('change', async function (e) {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            e.target.value = '';
+            status('Reading photo…', 5);
+            const dataUrl = await new Promise(r => {
+                const fr = new FileReader();
+                fr.onload = () => r(fr.result);
+                fr.readAsDataURL(f);
+            });
+            status('Sending to Meshy…', 10);
+            setStep('processing');
+            let taskId;
+            try {
+                const r = await fetch(API + '/modder/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_data_url: dataUrl }),
+                });
+                const j = await r.json();
+                if (!j.ok) throw new Error(j.error || 'generate failed');
+                taskId = j.task_id;
+            } catch (err) {
+                status('Upload failed: ' + err.message, 0);
+                statusHide(4000);
+                setStep(1);
+                return;
+            }
+            /* Poll /dancer/status with ?skip_bake=1 so the server won't
+               fire the 3-dance bake pipeline (we don't need them here). */
+            pollTask(taskId);
+        });
+
+        function pollTask(taskId) {
+            let done = false, tries = 0;
+            (function tick() {
+                if (done || tries++ > 400) return;
+                fetch(API + '/modder/status/' + taskId)
+                    .then(r => r.json())
+                    .then(j => {
+                        if (!j.ok) throw new Error(j.error || 'status failed');
+                        const phase = j.phase || 'image';
+                        status(phase.toUpperCase() + '…', j.progress || 0);
+                        if (j.status === 'SUCCEEDED' && j.model_url) {
+                            done = true;
+                            status('Rigged!', 100);
+                            statusHide();
+                            loadCharacter(j.model_url, taskId);
+                            return;
+                        }
+                        if (j.status === 'FAILED' || j.status === 'CANCELED') {
+                            done = true;
+                            status('Rigging failed', 0);
+                            statusHide(4000);
+                            return;
+                        }
+                        setTimeout(tick, 3500);
+                    })
+                    .catch(err => {
+                        status('Poll error: ' + err.message, 0);
+                        setTimeout(tick, 4000);
+                    });
+            })();
+        }
+
+        /* ── Load a rigged character (Meshy CDN URL or our own) ──── */
+        function loadCharacter(url, imgTaskId) {
+            if (!sceneReady) return;
+            const loading = document.getElementById('avatar-loading');
+            loading.classList.add('on');
+            /* Extract rig_task_id from the URL for later FBX download. */
+            let rigId = null;
+            let m = /\/tasks\/([0-9a-f-]{20,})\//i.exec(url);
+            if (m) rigId = m[1];
+            else {
+                m = /\/dancer-anims\/([0-9a-f-]{20,})\//i.exec(url);
+                if (m) rigId = m[1];
+            }
+            currentRigId = rigId;
+
+            /* Route non-same-origin GLBs through the model proxy. */
+            let fetchUrl = url;
+            try {
+                if (new URL(url, location.href).origin !== location.origin) {
+                    fetchUrl = API + '/modder/model?url=' + encodeURIComponent(url);
+                }
+            } catch (_) {}
+
+            new THREE.GLTFLoader().load(fetchUrl, gltf => {
+                _dbg('user GLB fetched anims=' + (gltf.animations || []).length + ' rig=' + (rigId||'?').slice(-6));
+                if (currentModel) scene.remove(currentModel);
+                _placeholderActive = false;
+                const model = gltf.scene;
+                _frameAvatar(model, gltf.animations);
+                scene.add(model);
+                currentModel = model;
+                mixer = new THREE.AnimationMixer(model);
+                if (gltf.animations && gltf.animations.length) {
+                    mixer.clipAction(gltf.animations[0]).play();
+                }
+                loading.classList.remove('on');
+                _refreshButtons();
+                if (rigId) _rememberRoster(rigId, url);
+            }, undefined, err => {
+                console.error('load fail', err);
+                loading.classList.remove('on');
+                status('Load failed', 0);
+                statusHide(3000);
+            });
+        }
+
+        function _refreshButtons() {
+            /* Advance to whichever step is next based on state. */
+            if (!currentRigId) setStep(1);
+            else if (!currentBaseDatId) setStep(2);
+            else setStep(3);
+        }
+
+        function _rememberRoster(rigId, url) {
+            if (_roster.find(r => r.rigId === rigId)) return;
+            _roster.push({ rigId, url });
+            const strip = document.getElementById('roster');
+            const div = document.createElement('div');
+            div.className = 'roster-thumb active';
+            div.style.background = 'rgba(0,0,0,.5)';
+            div.title = rigId.slice(-8);
+            div.onclick = () => {
+                document.querySelectorAll('.roster-thumb').forEach(el => el.classList.remove('active'));
+                div.classList.add('active');
+                loadCharacter(url, rigId);
+            };
+            document.querySelectorAll('.roster-thumb').forEach(el => el.classList.remove('active'));
+            strip.appendChild(div);
+        }
+
+        /* ── DAT upload → transitions to Step 3 ──────────────────── */
+        document.getElementById('dat-input').addEventListener('change', async function (e) {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            e.target.value = '';
+            if (f.size > 4 * 1024 * 1024) {
+                status('DAT too big (max 4 MB)', 0);
+                statusHide(3000); return;
+            }
+            status('Uploading base .DAT…', 30);
+            setStep('processing');
+            const buf = await f.arrayBuffer();
+            const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+            try {
+                const r = await fetch(API + '/modder/base-dat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: f.name, data_b64: b64 }),
+                });
+                const j = await r.json();
+                if (!j.ok) throw new Error(j.error || 'upload failed');
+                currentBaseDatId = j.dat_id;
+                status('.DAT saved: ' + f.name, 100);
+                statusHide();
+                _refreshButtons();
+            } catch (err) {
+                status('DAT upload failed: ' + err.message, 0);
+                statusHide(4000);
+                setStep(2);
+            }
+        });
+
+        window.modProcess = async function () {
+            if (!currentRigId || !currentBaseDatId) return;
+            status('Splicing your character into the base .DAT…', 40);
+            setStep('processing');
+            try {
+                const r = await fetch(API + '/modder/process/' + currentRigId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_dat_id: currentBaseDatId }),
+                });
+                const j = await r.json();
+                if (!j.ok) throw new Error(j.error || 'process failed');
+                if (j.status === 'wip') {
+                    status('Splice engine not yet wired — coming next update.', 100);
+                    statusHide(6000);
+                    setStep(3);
+                    return;
+                }
+                /* Three success cases:
+                   - dat_ready         → full auto: modded .dat downloaded, ready for Melee
+                   - fbx_ready_dat_failed → Blender OK but HSDLib splice failed; give FBX for manual finish
+                   - fbx_ready         → v0.75 fallback (kept for older builds); FBX only */
+                const filename = j.output_filename
+                              || ('mod-' + currentRigId.slice(-8) + '.dat');
+                const a = document.createElement('a');
+                a.href = API + j.download_path;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                if (j.status === 'dat_ready') {
+                    status('Modded .DAT downloaded.\nDrop it into your Melee ISO via Texture Wizard and load it up.', 100);
+                    statusHide(10000);
+                } else if (j.status === 'fbx_ready_dat_failed' || j.status === 'fbx_ready') {
+                    status('Rigged FBX downloaded.\nHSDLib splice failed on this one — open the .fbx in HSDRaw ▶ Import Mesh to finish manually (~10s).', 100);
+                    statusHide(15000);
+                } else {
+                    status('Modded file ready — downloading…', 100);
+                    statusHide(3000);
+                }
+                setStep(3);
+            } catch (err) {
+                status('Process failed: ' + err.message, 0);
+                statusHide(5000);
+                setStep(3);
+            }
+        };
+
+        /* ── Dev ISO uploader (bottom-right) ─────────────────────
+           Streams a Melee ISO straight to the server via
+           /modder/dev-iso with XHR so we get upload-progress %.
+           Reused as the source ISO for the future in-game test loop. */
+        window.uploadDevIso = function () {
+            document.getElementById('iso-input').click();
+        };
+        function isoStatus(text) {
+            const el = document.getElementById('dev-iso-status');
+            el.textContent = text; el.style.display = 'block';
+        }
+        function isoStatusHideLater(ms) {
+            setTimeout(() => document.getElementById('dev-iso-status').style.display = 'none', ms || 10000);
+        }
+        document.getElementById('iso-input').addEventListener('change', function (e) {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            e.target.value = '';
+            /* Melee ISOs are ~1.4 GB uncompressed; RVZ ~500 MB. Warn on
+               anything under 100 MB (probably wrong file). */
+            if (f.size < 100 * 1024 * 1024) {
+                isoStatus('too small (' + Math.round(f.size / 1024 / 1024) + ' MB) — Melee ISO is ~1.4 GB or ~500 MB as RVZ');
+                isoStatusHideLater();
+                return;
+            }
+            const url = API + '/modder/dev-iso?name=' + encodeURIComponent(f.name);
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', url);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.upload.onprogress = ev => {
+                if (!ev.lengthComputable) return;
+                const pct = Math.round((ev.loaded / ev.total) * 100);
+                const mb  = Math.round(ev.loaded / 1024 / 1024);
+                const tot = Math.round(ev.total  / 1024 / 1024);
+                isoStatus('uploading ' + pct + '%  ' + mb + '/' + tot + ' MB');
+            };
+            xhr.onload = () => {
+                try {
+                    const j = JSON.parse(xhr.responseText);
+                    if (!j.ok) throw new Error(j.error || ('HTTP ' + xhr.status));
+                    isoStatus('ISO stored ✓\n' + j.filename + '\n' + Math.round(j.size / 1024 / 1024) + ' MB, sha=' + j.sha256.slice(0, 12) + '\nin ' + j.seconds.toFixed(1) + 's');
+                    isoStatusHideLater(20000);
+                } catch (err) {
+                    isoStatus('upload fail: ' + err.message + '\n' + xhr.responseText.slice(0, 200));
+                    isoStatusHideLater();
+                }
+            };
+            xhr.onerror = () => { isoStatus('network error'); isoStatusHideLater(); };
+            isoStatus('starting upload ' + f.name + ' (' + Math.round(f.size / 1024 / 1024) + ' MB)…');
+            xhr.send(f);
+        });
+
+        /* Fullscreen toggle — clicked on the IMAGE TO MOD title.
+           Standard + -webkit- fallbacks for iOS Safari. Errors swallowed
+           so a permission-denied doesn't surface. */
+        window.toggleFullscreen = function () {
+            const doc = document;
+            const el  = doc.documentElement;
+            const isFs = doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
+            try {
+                if (isFs) {
+                    (doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen).call(doc);
+                } else {
+                    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+                    if (req) req.call(el);
+                }
+            } catch (_) {}
+        };
+
+        initScene();
+    </script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# Build outputs
+bin/
+obj/
+node_modules/
+package-lock.json
+
+# Secrets & config
+*.key
+*.token
+.env
+.env.local
+
+# User uploads / server storage
+/server/uploads/
+/server/base-dats/
+/server/isos/
+/server/mods/
+/server/logs/
+/server/state/
+
+# HSDLib submodule (users clone Ploaj/HSDLib themselves)
+/hsdcli/HSDRaw.dll
+/hsdcli/IONET.dll
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
