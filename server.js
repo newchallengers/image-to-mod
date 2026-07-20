@@ -759,6 +759,270 @@ app.post('/modder/dev-fixture', express.json({ limit: '8mb' }), (req, res) => {
     } catch (e) { res.status(500).json({ ok: false, error: 'save fail: ' + e.message }); }
 });
 
+// ─── UnclePunch Training Mode builder + in-Melee screenshot loop ─────
+// UnclePunch v3.0-Alpha7.2 ships as an xdelta patch (~7 MB) that turns
+// a clean vanilla NTSC 1.02 ISO into TM.iso. No compilation needed.
+// The patch expects the vanilla ISO to have MD5 = 0e63d4223b01d9aba596259dc155a174.
+const TM_PATCH        = process.env.TM_PATCH || '/opt/tm-release/Training Mode 3.0 Alpha7.2/TM ISO Builder/patch.xdelta';
+const TM_VANILLA_MD5  = '0e63d4223b01d9aba596259dc155a174';
+const TM_ISO_PATH     = path.join(dirs.isos, 'melee_TM.iso');
+const TM_META_PATH    = path.join(dirs.state, 'tm-build.json');
+const XDELTA3         = process.env.XDELTA3 || '/usr/bin/xdelta3';
+const WIT             = process.env.WIT     || '/usr/bin/wit';
+const DOLPHIN         = process.env.DOLPHIN || '/usr/local/bin/dolphin-emu-nogui';
+const XVFB_RUN        = process.env.XVFB_RUN || '/usr/bin/xvfb-run';
+const FFMPEG          = process.env.FFMPEG  || '/usr/bin/ffmpeg';
+
+// Vanilla-ISO detection. Users upload their own copy; the file lives at
+// isos/<something>.iso (not necessarily named "vanilla"). We pick the largest
+// .iso that isn't melee_TM.iso and md5 it.
+function findVanillaIso(cb) {
+    let candidates;
+    try {
+        candidates = fs.readdirSync(dirs.isos)
+            .filter(n => /\.(iso|rvz|gcz)$/i.test(n) && n !== path.basename(TM_ISO_PATH))
+            .map(n => ({ n, p: path.join(dirs.isos, n), size: fs.statSync(path.join(dirs.isos, n)).size }))
+            .sort((a, b) => b.size - a.size);
+    } catch (e) { return cb(e); }
+    if (!candidates.length) return cb(new Error('no ISO uploaded'));
+    // Only .iso is patchable by the xdelta patch (rvz/gcz are compressed)
+    const iso = candidates.find(c => /\.iso$/i.test(c.n));
+    if (!iso) return cb(new Error('found ' + candidates[0].n + ' but xdelta needs raw .iso, not rvz/gcz'));
+    cb(null, iso);
+}
+function md5File(p, cb) {
+    const h = crypto.createHash('md5');
+    const s = fs.createReadStream(p);
+    s.on('data', c => h.update(c));
+    s.on('end', () => cb(null, h.digest('hex')));
+    s.on('error', cb);
+}
+
+// POST /modder/build-tm-iso — one-shot, safe to call repeatedly (idempotent
+// if TM.iso already exists and vanilla ISO is unchanged). Response is quick:
+// returns a job_id, actual patch runs async and is polled via GET.
+const tmJobs = {};   // jobId -> { status, err, elapsed_s, tm_size, source_md5 }
+app.post('/modder/build-tm-iso', (req, res) => {
+    if (!fs.existsSync(TM_PATCH)) return res.status(500).json({ ok: false, error: 'TM patch missing at ' + TM_PATCH });
+    if (!fs.existsSync(XDELTA3))  return res.status(500).json({ ok: false, error: 'xdelta3 not installed' });
+    findVanillaIso((err, iso) => {
+        if (err) return res.status(400).json({ ok: false, error: err.message });
+        const jobId = 'tm-' + crypto.randomBytes(6).toString('hex');
+        tmJobs[jobId] = { status: 'md5', source: iso.n, ts: Date.now() };
+        res.json({ ok: true, job_id: jobId, source: iso.n, source_size: iso.size });
+
+        md5File(iso.p, (mErr, md5) => {
+            if (mErr) { tmJobs[jobId].status = 'error'; tmJobs[jobId].err = 'md5 fail: ' + mErr.message; return; }
+            tmJobs[jobId].source_md5 = md5;
+            if (md5 !== TM_VANILLA_MD5) {
+                tmJobs[jobId].status = 'error';
+                tmJobs[jobId].err = 'ISO MD5 ' + md5 + ' does not match expected ' + TM_VANILLA_MD5 +
+                    ' — you need vanilla NTSC 1.02 (Tournament Standard). Yours might be v1.00, v1.01, PAL, or already modded.';
+                log('tm-build', 'job=' + jobId + ' MD5 MISMATCH ' + md5);
+                return;
+            }
+            log('tm-build', 'job=' + jobId + ' MD5 ok, starting xdelta3');
+            tmJobs[jobId].status = 'patching';
+            const start = Date.now();
+            const tmpOut = TM_ISO_PATH + '.building';
+            try { fs.unlinkSync(tmpOut); } catch (_) {}
+            const proc = require('child_process').spawn(XDELTA3,
+                ['-dfs', iso.p, TM_PATCH, tmpOut],
+                { stdio: ['ignore', 'pipe', 'pipe'] });
+            let stderr = '';
+            proc.stderr.on('data', d => { stderr += d.toString(); });
+            proc.on('close', code => {
+                const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+                if (code !== 0 || !fs.existsSync(tmpOut)) {
+                    tmJobs[jobId].status = 'error';
+                    tmJobs[jobId].err = 'xdelta3 exit ' + code + ' ' + stderr.slice(-300);
+                    try { fs.unlinkSync(tmpOut); } catch (_) {}
+                    log('tm-build', 'job=' + jobId + ' PATCH FAIL ' + stderr.slice(-200));
+                    return;
+                }
+                try { fs.renameSync(tmpOut, TM_ISO_PATH); } catch (e) {
+                    tmJobs[jobId].status = 'error';
+                    tmJobs[jobId].err = 'rename: ' + e.message; return;
+                }
+                const size = fs.statSync(TM_ISO_PATH).size;
+                tmJobs[jobId].status = 'done';
+                tmJobs[jobId].elapsed_s = parseFloat(elapsed);
+                tmJobs[jobId].tm_size = size;
+                fs.writeFileSync(TM_META_PATH, JSON.stringify({
+                    built_at: new Date().toISOString(),
+                    source_iso: iso.n, source_md5: md5,
+                    tm_iso: TM_ISO_PATH, tm_size: size,
+                    elapsed_s: parseFloat(elapsed),
+                }, null, 2));
+                log('tm-build', 'job=' + jobId + ' DONE ' + size + 'B in ' + elapsed + 's');
+            });
+        });
+    });
+});
+app.get('/modder/build-tm-iso/:jobId', (req, res) => {
+    const j = tmJobs[safeId(req.params.jobId)];
+    if (!j) return res.status(404).json({ ok: false, error: 'unknown job' });
+    res.json({ ok: true, job: j, tm_iso_exists: fs.existsSync(TM_ISO_PATH), tm_iso_size: fs.existsSync(TM_ISO_PATH) ? fs.statSync(TM_ISO_PATH).size : 0 });
+});
+app.get('/modder/tm-status', (req, res) => {
+    let meta = null;
+    try { meta = JSON.parse(fs.readFileSync(TM_META_PATH, 'utf8')); } catch (_) {}
+    res.json({ ok: true, tm_iso_exists: fs.existsSync(TM_ISO_PATH),
+        tm_iso_size: fs.existsSync(TM_ISO_PATH) ? fs.statSync(TM_ISO_PATH).size : 0,
+        meta: meta });
+});
+
+// POST /modder/test-in-melee/:modFilename — inject a mod .DAT into TM.iso,
+// boot Dolphin under xvfb, capture 3 screenshots ~3s apart via ffmpeg x11grab,
+// return public URLs. body: { char_slot: "PlCaNr" }  (which vanilla character
+// file to overwrite — defaults to PlCaNr = Falcon neutral costume).
+const testJobs = {};
+app.post('/modder/test-in-melee/:modFilename', express.json({ limit: '4kb' }), (req, res) => {
+    const modName = safeFilename(req.params.modFilename);
+    if (!/^mod-[a-z0-9_-]+\.dat$/i.test(modName)) return res.status(400).json({ ok: false, error: 'bad mod filename' });
+    const modPath = path.join(dirs.mods, modName);
+    if (!fs.existsSync(modPath)) return res.status(404).json({ ok: false, error: 'mod file not found' });
+    if (!fs.existsSync(TM_ISO_PATH)) return res.status(400).json({ ok: false, error: 'TM.iso not built yet; POST /modder/build-tm-iso first' });
+    const charSlot = safeId((req.body && req.body.char_slot) || 'PlCaNr', 12);
+    if (!/^[A-Z][a-z][A-Z][a-z][A-Z][a-z]$/.test(charSlot) && charSlot !== 'PlCaNr') {
+        // Loose validation — Melee char files are e.g. PlCaNr, PlFxRe, PlKbGr
+        // Accept anything that at least starts with Pl and is 4-8 chars
+        if (!/^Pl[A-Z][a-z][A-Za-z]{0,4}$/.test(charSlot)) {
+            return res.status(400).json({ ok: false, error: 'bad char_slot (expected e.g. PlCaNr for Falcon neutral)' });
+        }
+    }
+
+    const jobId = 'match-' + crypto.randomBytes(6).toString('hex');
+    testJobs[jobId] = { status: 'starting', ts: Date.now(), mod: modName, char_slot: charSlot };
+    res.json({ ok: true, job_id: jobId, mod: modName, char_slot: charSlot });
+
+    const workDir = path.join(dirs.mods, 'match-' + jobId);
+    fs.mkdirSync(workDir, { recursive: true });
+    const patchedIso = path.join(workDir, 'melee_TM_patched.iso');
+    const shotDir    = path.join(workDir, 'shots');
+    fs.mkdirSync(shotDir, { recursive: true });
+
+    // Step 1: wit patches the ISO by replacing files/<charSlot>.dat inside the ISO's filesystem.
+    log('test-in-melee', 'job=' + jobId + ' step=wit-patch slot=' + charSlot);
+    testJobs[jobId].status = 'wit-patch';
+    const { execFile, spawn } = require('child_process');
+    execFile(WIT, ['EDIT', TM_ISO_PATH, '--dest', patchedIso, '--overwrite',
+                   '--add-files', charSlot + '.dat=' + modPath], { timeout: 120000, maxBuffer: 8*1024*1024 },
+        (wErr, wOut, wErr2) => {
+            // Note: wit's syntax for replacing files inside an ISO is via COPY/EDIT
+            // + --add-files. If that syntax doesn't match your wit version, we
+            // fall back to explicit extract/replace/rebuild below.
+            if (wErr || !fs.existsSync(patchedIso)) {
+                log('test-in-melee', 'job=' + jobId + ' wit EDIT failed, falling back to extract/rebuild: ' + (wErr && wErr.message));
+                // Fallback: EXTRACT -> replace file -> REBUILD (CP)
+                const extractDir = path.join(workDir, 'extracted');
+                execFile(WIT, ['EXTRACT', TM_ISO_PATH, extractDir], { timeout: 180000, maxBuffer: 8*1024*1024 },
+                (eErr, eOut, eErr2) => {
+                    if (eErr) { testJobs[jobId].status = 'error'; testJobs[jobId].err = 'wit EXTRACT: ' + eErr.message; return; }
+                    // Find the char slot .dat under extractDir (usually files/<slot>.dat or DATA/files/<slot>.dat)
+                    const findTarget = (dir) => {
+                        const stack = [dir];
+                        while (stack.length) {
+                            const d = stack.pop();
+                            for (const n of fs.readdirSync(d)) {
+                                const p = path.join(d, n);
+                                const st = fs.statSync(p);
+                                if (st.isDirectory()) stack.push(p);
+                                else if (n.toLowerCase() === charSlot.toLowerCase() + '.dat') return p;
+                            }
+                        }
+                        return null;
+                    };
+                    const target = findTarget(extractDir);
+                    if (!target) { testJobs[jobId].status = 'error'; testJobs[jobId].err = 'could not find ' + charSlot + '.dat in extracted ISO'; return; }
+                    log('test-in-melee', 'job=' + jobId + ' replacing ' + target);
+                    fs.copyFileSync(modPath, target);
+                    execFile(WIT, ['COPY', extractDir, '--DEST', patchedIso, '--overwrite'],
+                        { timeout: 240000, maxBuffer: 8*1024*1024 },
+                        (cErr) => {
+                            if (cErr || !fs.existsSync(patchedIso)) {
+                                testJobs[jobId].status = 'error';
+                                testJobs[jobId].err = 'wit COPY (rebuild): ' + (cErr && cErr.message);
+                                return;
+                            }
+                            runDolphinAndShoot();
+                        });
+                });
+                return;
+            }
+            runDolphinAndShoot();
+        });
+
+    function runDolphinAndShoot() {
+        testJobs[jobId].status = 'booting-dolphin';
+        log('test-in-melee', 'job=' + jobId + ' step=dolphin boot');
+        const displayN = 90 + Math.floor(Math.random() * 10);   // :90..:99
+        const displayArg = ':' + displayN;
+        // xvfb-run wraps a command with a fresh Xvfb display so Dolphin can render.
+        // Dolphin flags: --exec to load the ISO, --config to set video backend
+        // and disable audio. -e / --exec runs headless-with-window.
+        const dolphinArgs = [
+            '-a', '-s', '-screen 0 800x600x24',
+            '-e', displayN.toString(),
+            DOLPHIN,
+            '--batch',
+            '--exec=' + patchedIso,
+            '--video_backend=Software',   // Software renderer avoids GPU/DRI headaches on xvfb
+        ];
+        const dol = spawn(XVFB_RUN, dolphinArgs, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: Object.assign({}, process.env, { DISPLAY: displayArg }),
+        });
+        let dolStderr = '';
+        dol.stderr.on('data', d => { dolStderr += d.toString(); });
+
+        // Wait 15s for boot to reach TM's own menu, then start capturing.
+        // TM boot is ~5s to menu; give it 15s to be safe.
+        // Take 3 screenshots 3s apart via ffmpeg x11grab -> PNG per capture.
+        setTimeout(() => {
+            testJobs[jobId].status = 'capturing';
+            const shots = [];
+            const grabOne = (i, doneCb) => {
+                const out = path.join(shotDir, 'shot-' + (i+1) + '.png');
+                execFile(FFMPEG, ['-y', '-loglevel', 'error',
+                    '-f', 'x11grab', '-video_size', '800x600',
+                    '-i', displayArg, '-frames:v', '1', out],
+                    { timeout: 15000 }, (fErr) => {
+                        if (!fErr && fs.existsSync(out)) {
+                            shots.push(out);
+                            log('test-in-melee', 'job=' + jobId + ' shot ' + (i+1) + ' captured');
+                        } else {
+                            log('test-in-melee', 'job=' + jobId + ' shot ' + (i+1) + ' FAIL ' + (fErr && fErr.message));
+                        }
+                        doneCb();
+                    });
+            };
+            const grabAll = (i) => {
+                if (i >= 3) {
+                    dol.kill('SIGTERM');
+                    setTimeout(() => dol.kill('SIGKILL'), 3000);
+                    // Publish shots under /public/mods/match-<jobId>/*
+                    testJobs[jobId].status = 'done';
+                    testJobs[jobId].shot_urls = shots.map(s =>
+                        '/public/mods/match-' + jobId + '/shots/' + path.basename(s));
+                    log('test-in-melee', 'job=' + jobId + ' DONE ' + shots.length + ' shots');
+                    return;
+                }
+                grabOne(i, () => setTimeout(() => grabAll(i+1), 3000));
+            };
+            grabAll(0);
+        }, 15000);
+
+        // Safety kill in case Dolphin hangs.
+        setTimeout(() => { try { dol.kill('SIGKILL'); } catch (_) {} }, 90000);
+    }
+});
+app.get('/modder/test-in-melee/:jobId', (req, res) => {
+    const j = testJobs[safeId(req.params.jobId)];
+    if (!j) return res.status(404).json({ ok: false, error: 'unknown job' });
+    res.json({ ok: true, job: j });
+});
+
 // ─── Logs + health ───────────────────────────────────────────────────
 app.get('/modder/logs', (req, res) => {
     const n = Math.max(1, Math.min(LOG_MAX, parseInt(req.query.limit || '200', 10)));
