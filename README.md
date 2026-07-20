@@ -5,7 +5,7 @@ Photo → automatic **Super Smash Bros. Melee** character skin mod.
 Upload a selfie, get back a real `PlCa.dat` (or any other Melee character `.DAT`
 you supply) with your face on it — ready to drop into your ISO.
 
-Live at **[d20.finance/modder](https://d20.finance/modder)** (also `/smash`).
+Live at **[scuffedskins.com/modder](https://scuffedskins.com/modder)**.
 
 ## The pipeline
 
