@@ -648,6 +648,50 @@ app.get('/modder/health', (req, res) => {
     });
 });
 
+// Lets the frontend know whether an ISO has been uploaded (so it can
+// paint the setup callout). Returns list summaries, not paths.
+app.get('/modder/iso-status', (req, res) => {
+    try {
+        const entries = fs.readdirSync(dirs.isos)
+            .filter(n => /\.(iso|rvz|gcz)$/i.test(n))
+            .map(n => {
+                const st = fs.statSync(path.join(dirs.isos, n));
+                return { name: n, size: st.size, mtime: st.mtimeMs };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+        res.json({ ok: true, count: entries.length, isos: entries.slice(0, 20) });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// List everything the test-in-melee pipeline can consume — rigs, base .DATs,
+// mods on disk — so the frontend can offer choices and I can drive it via curl.
+app.get('/modder/inventory', (req, res) => {
+    try {
+        const rigs = fs.readdirSync(dirs.fbx).filter(n => n.endsWith('.fbx')).map(n => {
+            const st = fs.statSync(path.join(dirs.fbx, n));
+            return { rig_id: n.replace(/\.fbx$/, ''), size: st.size, mtime: st.mtimeMs };
+        }).sort((a, b) => b.mtime - a.mtime);
+        const bases = fs.readdirSync(dirs.baseDats).filter(n => /^dat-.+\.dat$/.test(n)).map(n => {
+            const id = n.replace(/\.dat$/, '');
+            const meta = path.join(dirs.baseDats, id + '.meta.json');
+            let m = null;
+            try { m = JSON.parse(fs.readFileSync(meta, 'utf8')); } catch (_) {}
+            const st = fs.statSync(path.join(dirs.baseDats, n));
+            return { dat_id: id, size: st.size, filename: (m && m.filename) || null };
+        });
+        let fixtures = [];
+        try {
+            fixtures = fs.readdirSync(path.join(dirs.baseDats, 'dev-fixtures'))
+                .filter(n => n.endsWith('.dat')).map(n => ({ name: n }));
+        } catch (_) {}
+        const mods = fs.readdirSync(dirs.mods).filter(n => n.startsWith('mod-') && n.endsWith('.dat')).map(n => {
+            const st = fs.statSync(path.join(dirs.mods, n));
+            return { name: n, size: st.size, mtime: st.mtimeMs, download_path: '/modder/download/' + n };
+        }).sort((a, b) => b.mtime - a.mtime);
+        res.json({ ok: true, rigs, bases, fixtures, mods });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Non-consuming promo check for the frontend. Body: { code }
 // Response: { ok: true, remaining: N } or { ok: false, remaining: 0, error }
 app.post('/modder/promo/check', express.json({ limit: '2kb' }), (req, res) => {

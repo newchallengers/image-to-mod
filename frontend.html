@@ -312,6 +312,59 @@
             75%     { transform: translateX(4px); }
         }
         .free-mods-left.bad { animation: promo-shake 0.35s ease; }
+        /* ISO upload callout. Loud + red until an ISO is present, then
+           collapses to a small green pill in the corner. */
+        #dev-iso-status {
+            position: fixed; top: 76px; right: 12px; z-index: 26;
+            font: 12px system-ui; color: #fff;
+            background: rgba(20,20,25,.9);
+            padding: 6px 12px; border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,.5);
+            max-width: 320px; white-space: pre-wrap;
+            display: none;
+        }
+        #dev-iso-btn {
+            position: fixed; top: 14px; right: 14px; z-index: 25;
+            font-family: 'Impact', 'Anton', system-ui, sans-serif;
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+            display: flex; align-items: center; gap: 8px;
+            transition: all 0.2s ease;
+        }
+        #dev-iso-btn.need-iso {
+            background: linear-gradient(180deg, #ff4d4d 0%, #b31313 100%);
+            color: #fff;
+            border: 3px solid #fff;
+            padding: 10px 16px;
+            font-size: 1rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-weight: 900;
+            box-shadow: 0 4px 0 rgba(0,0,0,.4), 0 0 0 rgba(255,80,80,.7);
+            animation: iso-pulse 1.6s ease-in-out infinite;
+        }
+        #dev-iso-btn.have-iso {
+            background: rgba(20,80,30,.8);
+            color: #b6ffb6;
+            border: 1px solid rgba(180,255,180,.4);
+            padding: 4px 10px;
+            font-size: 11px;
+            letter-spacing: 1px;
+            box-shadow: 0 2px 6px rgba(0,0,0,.4);
+        }
+        @keyframes iso-pulse {
+            0%,100% { box-shadow: 0 4px 0 rgba(0,0,0,.4), 0 0 0 rgba(255,80,80,.0); transform: scale(1); }
+            50%     { box-shadow: 0 4px 0 rgba(0,0,0,.4), 0 0 32px rgba(255,120,120,.85); transform: scale(1.04); }
+        }
+        #dev-iso-btn .dev-iso-icon { font-size: 1.3em; }
+        #dev-iso-btn.have-iso .dev-iso-icon { color: #b6ffb6; }
+        @media (max-width: 800px) {
+            #dev-iso-btn.need-iso {
+                padding: 7px 10px; font-size: 0.72rem; letter-spacing: 1px;
+                border-width: 2px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -343,11 +396,15 @@
     <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp" style="display:none">
     <input id="dat-input"   type="file" accept=".dat,application/octet-stream"   style="display:none">
     <input id="iso-input"   type="file" accept=".iso,.rvz,.gcz,application/octet-stream" style="display:none">
-    <div id="dev-iso-status" style="position:fixed;bottom:44px;right:12px;z-index:25;font:11px system-ui;color:#fff;background:rgba(30,30,30,.85);padding:4px 8px;border-radius:4px;display:none;max-width:280px;white-space:pre-wrap;"></div>
+    <div id="dev-iso-status"></div>
+    <!-- Dev ISO upload — needed for in-Dolphin screenshot tests. Painted
+         BIG + red when no ISO uploaded; small + green check when ready.
+         iso-status is polled on boot from /modder/iso-status. -->
     <div id="dev-iso-btn" onclick="window.uploadDevIso()"
-         style="position:fixed;bottom:12px;right:12px;z-index:25;font:11px system-ui;color:rgba(255,255,255,.9);background:rgba(30,30,30,.75);border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:4px 8px;cursor:pointer;letter-spacing:.5px;box-shadow:0 2px 6px rgba(0,0,0,.4);user-select:none;"
-         title="Dev: upload your own Melee ISO for the in-game test loop">
-        dev: upload Melee ISO
+         class="need-iso"
+         title="Upload your own Melee ISO for the in-game test loop">
+        <span class="dev-iso-icon">⚠</span>
+        <span class="dev-iso-text">SETUP: UPLOAD MELEE ISO</span>
     </div>
 
     <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
@@ -1207,6 +1264,32 @@
         function isoStatusHideLater(ms) {
             setTimeout(() => document.getElementById('dev-iso-status').style.display = 'none', ms || 10000);
         }
+        function _isoPaint(hasIso, name, mb) {
+            const btn = document.getElementById('dev-iso-btn');
+            if (!btn) return;
+            if (hasIso) {
+                btn.classList.remove('need-iso');
+                btn.classList.add('have-iso');
+                btn.querySelector('.dev-iso-icon').textContent = '✓';
+                btn.querySelector('.dev-iso-text').textContent = 'ISO ready (' + mb + ' MB) — re-upload';
+                btn.title = 'ISO: ' + name;
+            } else {
+                btn.classList.remove('have-iso');
+                btn.classList.add('need-iso');
+                btn.querySelector('.dev-iso-icon').textContent = '⚠';
+                btn.querySelector('.dev-iso-text').textContent = 'SETUP: UPLOAD MELEE ISO';
+                btn.title = 'Upload your own Melee ISO for the in-game test loop';
+            }
+        }
+        function _refreshIsoStatus() {
+            fetch(API + '/modder/iso-status').then(r => r.json()).then(j => {
+                if (j.ok && j.count > 0) {
+                    const iso = j.isos[0];
+                    _isoPaint(true, iso.name, Math.round(iso.size / 1024 / 1024));
+                } else _isoPaint(false);
+            }).catch(() => {});
+        }
+        _refreshIsoStatus();
         document.getElementById('iso-input').addEventListener('change', function (e) {
             const f = e.target.files && e.target.files[0];
             if (!f) return;
@@ -1235,6 +1318,7 @@
                     if (!j.ok) throw new Error(j.error || ('HTTP ' + xhr.status));
                     isoStatus('ISO stored ✓\n' + j.filename + '\n' + Math.round(j.size / 1024 / 1024) + ' MB, sha=' + j.sha256.slice(0, 12) + '\nin ' + j.seconds.toFixed(1) + 's');
                     isoStatusHideLater(20000);
+                    _refreshIsoStatus();
                 } catch (err) {
                     isoStatus('upload fail: ' + err.message + '\n' + xhr.responseText.slice(0, 200));
                     isoStatusHideLater();
