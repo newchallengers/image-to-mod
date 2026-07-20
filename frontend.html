@@ -365,6 +365,43 @@
                 border-width: 2px;
             }
         }
+        /* Paste-URL row sits directly under the SETUP button, matches its
+           width so the two form a compact block. Hidden once ISO present. */
+        #dev-iso-url-row {
+            position: fixed; top: 72px; right: 14px; z-index: 25;
+            display: flex; gap: 6px;
+            width: 380px; max-width: calc(100vw - 28px);
+        }
+        #dev-iso-url {
+            flex: 1; min-width: 0;
+            background: rgba(20,20,25,.88);
+            color: #fff;
+            border: 2px solid rgba(255,255,255,.4);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font: 12px system-ui;
+            letter-spacing: .3px;
+            outline: none;
+        }
+        #dev-iso-url::placeholder { color: rgba(255,255,255,.55); }
+        #dev-iso-url:focus { border-color: #ffcf3c; }
+        #dev-iso-url-btn {
+            background: linear-gradient(180deg, #ffcf3c 0%, #d18f00 100%);
+            color: #4a2900;
+            border: 2px solid #fff;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font: 900 12px 'Impact', 'Anton', system-ui, sans-serif;
+            letter-spacing: 1.5px;
+            cursor: pointer;
+            box-shadow: 0 2px 0 rgba(0,0,0,.4);
+        }
+        #dev-iso-url-btn:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(0,0,0,.4); }
+        #dev-iso-btn.have-iso ~ #dev-iso-url-row { display: none; }
+        @media (max-width: 800px) {
+            #dev-iso-url-row { width: 260px; top: 60px; }
+            #dev-iso-url { font-size: 11px; padding: 6px 8px; }
+        }
     </style>
 </head>
 <body>
@@ -399,12 +436,20 @@
     <div id="dev-iso-status"></div>
     <!-- Dev ISO upload — needed for in-Dolphin screenshot tests. Painted
          BIG + red when no ISO uploaded; small + green check when ready.
-         iso-status is polled on boot from /modder/iso-status. -->
+         iso-status is polled on boot from /modder/iso-status.
+         Two paths: direct browser upload (fragile on mobile for 1.4 GB),
+         and paste a Mega / Drive URL (server pulls it, robust). -->
     <div id="dev-iso-btn" onclick="window.uploadDevIso()"
          class="need-iso"
-         title="Upload your own Melee ISO for the in-game test loop">
+         title="Click to upload your Melee ISO from this device">
         <span class="dev-iso-icon">⚠</span>
         <span class="dev-iso-text">SETUP: UPLOAD MELEE ISO</span>
+    </div>
+    <div id="dev-iso-url-row">
+        <input id="dev-iso-url" type="url"
+               placeholder="…or paste Mega / Google Drive ISO link (server pulls it — walk away)"
+               autocomplete="off" spellcheck="false">
+        <button id="dev-iso-url-btn" onclick="window.fetchIsoFromUrl()">FETCH</button>
     </div>
 
     <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
@@ -1284,12 +1329,55 @@
         function _refreshIsoStatus() {
             fetch(API + '/modder/iso-status').then(r => r.json()).then(j => {
                 if (j.ok && j.count > 0) {
-                    const iso = j.isos[0];
-                    _isoPaint(true, iso.name, Math.round(iso.size / 1024 / 1024));
-                } else _isoPaint(false);
+                    /* Ignore accidental small drops (test .DATs etc.) — a real
+                       Melee ISO is >= 500 MB. Anything smaller doesn't count. */
+                    const real = (j.isos || []).find(i => i.size >= 500 * 1024 * 1024);
+                    if (real) return _isoPaint(true, real.name, Math.round(real.size / 1024 / 1024));
+                }
+                _isoPaint(false);
             }).catch(() => {});
         }
         _refreshIsoStatus();
+        window.fetchIsoFromUrl = function () {
+            const inp = document.getElementById('dev-iso-url');
+            const url = (inp.value || '').trim();
+            if (!/^https:\/\//.test(url)) { isoStatus('paste a full https:// link'); isoStatusHideLater(4000); return; }
+            isoStatus('starting server-side fetch…');
+            fetch(API + '/modder/dev-iso-from-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url }),
+            }).then(r => r.json()).then(j => {
+                if (!j.ok) { isoStatus('start fail: ' + (j.error || '?')); isoStatusHideLater(5000); return; }
+                isoStatus('fetching…\n' + (j.filename || 'iso') + '\nyou can close this tab; server is downloading');
+                inp.value = '';
+                const jid = j.job_id;
+                const tick = () => {
+                    fetch(API + '/modder/dev-iso-from-url/' + jid).then(r => r.json()).then(k => {
+                        if (!k.ok) return;
+                        const st = k.job;
+                        if (st.status === 'done') {
+                            const mb = Math.round(st.received / 1024 / 1024);
+                            isoStatus('ISO fetched ✓\n' + (st.filename || '?') + ' (' + mb + ' MB)');
+                            isoStatusHideLater(15000);
+                            _refreshIsoStatus();
+                            return;
+                        }
+                        if (st.status === 'error') {
+                            isoStatus('fetch failed: ' + (st.err || '?'));
+                            isoStatusHideLater(10000);
+                            return;
+                        }
+                        const pct = st.total ? Math.round((st.received / st.total) * 100) : Math.round(st.received);
+                        const mb  = st.total ? Math.round(st.received / 1024 / 1024) + '/' + Math.round(st.total / 1024 / 1024) + ' MB'
+                                             : Math.round(st.received) + ' (Mega %)';
+                        isoStatus('fetching ' + pct + '%  ' + mb + '\n(server is downloading; refresh anytime)');
+                        setTimeout(tick, 3000);
+                    }).catch(() => setTimeout(tick, 5000));
+                };
+                setTimeout(tick, 1500);
+            }).catch(err => { isoStatus('network error: ' + err.message); isoStatusHideLater(); });
+        };
         document.getElementById('iso-input').addEventListener('change', function (e) {
             const f = e.target.files && e.target.files[0];
             if (!f) return;

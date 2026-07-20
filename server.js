@@ -589,6 +589,144 @@ app.post('/modder/dev-iso', (req, res) => {
     req.pipe(w);
 });
 
+/*
+ * POST /modder/dev-iso-from-url — server-side fetch of large ISOs.
+ * body: { url: "https://drive.google.com/file/d/…/view" | "https://mega.nz/file/…#…" | any https url }
+ * Streams the download to disk with progress logged to /modder/logs. Returns
+ * once complete; frontend polls /modder/iso-status while it runs.
+ *
+ * Rationale: uploading a 1.4 GB Melee ISO from a mobile browser is fragile
+ * (tab suspend, WiFi flips, session timeout). Server-to-server pulls from
+ * Drive/Mega are steady 100+ Mbps and survive whatever the phone does.
+ */
+const isoJobs = {};   // jobId -> { status, received, total, ts, err, filename }
+function newIsoJob() {
+    const id = 'iso-' + crypto.randomBytes(6).toString('hex');
+    isoJobs[id] = { status: 'starting', received: 0, total: 0, ts: Date.now(), err: null, filename: null };
+    return id;
+}
+function extractDriveId(url) {
+    const m = /\/file\/d\/([A-Za-z0-9_-]{20,})/.exec(url) || /[?&]id=([A-Za-z0-9_-]{20,})/.exec(url);
+    return m ? m[1] : null;
+}
+function driveDirectUrl(id) {
+    return 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(id) + '&export=download&confirm=t';
+}
+function isMegaUrl(url) {
+    return /^https?:\/\/(www\.)?mega\.(nz|co\.nz)\/file\//.test(url);
+}
+app.post('/modder/dev-iso-from-url', express.json({ limit: '4kb' }), (req, res) => {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https:\/\//.test(url)) return res.status(400).json({ ok: false, error: 'https url required' });
+
+    const jobId = newIsoJob();
+    const startTs = Date.now();
+    const suggested = safeFilename((req.body && req.body.name) || 'melee.iso', 60);
+    const finalName = /\.(iso|rvz|gcz)$/i.test(suggested) ? suggested : suggested + '.iso';
+    let dst = path.join(dirs.isos, finalName);
+    const tmp = dst + '.downloading';
+    isoJobs[jobId].filename = finalName;
+
+    log('iso-fetch', 'job=' + jobId + ' url=' + url.slice(0, 80));
+    res.json({ ok: true, job_id: jobId, filename: finalName, url: url.slice(0, 200) });
+
+    // --- Path A: Mega — shell out to megadl which handles E2E key from URL fragment.
+    if (isMegaUrl(url)) {
+        isoJobs[jobId].status = 'downloading';
+        const megadl = require('child_process').spawn('megadl', ['--path=' + dirs.isos, url], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stderr = '';
+        megadl.stderr.on('data', d => { stderr += d.toString(); });
+        megadl.stdout.on('data', d => {
+            const m = /(\d+\.\d+)%/.exec(d.toString());
+            if (m) { isoJobs[jobId].received = parseFloat(m[1]); }
+        });
+        megadl.on('close', code => {
+            if (code !== 0) {
+                isoJobs[jobId].status = 'error';
+                isoJobs[jobId].err = 'megadl exit ' + code + ' ' + stderr.slice(-200);
+                log('iso-fetch', 'job=' + jobId + ' megadl FAIL ' + stderr.slice(-200));
+                return;
+            }
+            // megadl saves with the original filename; find newest .iso/.rvz/.gcz/.dat in dirs.isos
+            const entries = fs.readdirSync(dirs.isos).filter(n => !n.endsWith('.downloading'))
+                .map(n => ({ n, m: fs.statSync(path.join(dirs.isos, n)).mtimeMs })).sort((a,b) => b.m - a.m);
+            const newest = entries[0];
+            const sz = newest ? fs.statSync(path.join(dirs.isos, newest.n)).size : 0;
+            isoJobs[jobId].status = 'done';
+            isoJobs[jobId].received = sz;
+            isoJobs[jobId].total = sz;
+            isoJobs[jobId].filename = newest ? newest.n : finalName;
+            log('iso-fetch', 'job=' + jobId + ' megadl OK ' + (newest && newest.n) + ' ' + sz + 'B in ' + ((Date.now() - startTs)/1000).toFixed(1) + 's');
+        });
+        return;
+    }
+
+    // --- Path B: Drive or arbitrary HTTPS URL — use axios stream to disk.
+    const fetchUrl = (() => {
+        const gid = /drive\.google\.com/.test(url) ? extractDriveId(url) : null;
+        return gid ? driveDirectUrl(gid) : url;
+    })();
+    isoJobs[jobId].status = 'downloading';
+    axios.get(fetchUrl, { responseType: 'stream', maxRedirects: 10, timeout: 0 }).then(r => {
+        const total = parseInt(r.headers['content-length'] || '0', 10) || 0;
+        isoJobs[jobId].total = total;
+        // If Drive gave us a filename via Content-Disposition, prefer it
+        const cd = r.headers['content-disposition'] || '';
+        const cdm = /filename="([^"]+)"/.exec(cd);
+        if (cdm) {
+            const safe = safeFilename(cdm[1], 80);
+            if (/\.(iso|rvz|gcz)$/i.test(safe)) {
+                dst = path.join(dirs.isos, safe);
+                isoJobs[jobId].filename = safe;
+            }
+        }
+        const w = fs.createWriteStream(tmp);
+        let received = 0;
+        let lastLog = 0;
+        r.data.on('data', chunk => {
+            received += chunk.length;
+            isoJobs[jobId].received = received;
+            if (Date.now() - lastLog > 5000) {
+                lastLog = Date.now();
+                const pct = total ? Math.round(received/total*100) : 0;
+                log('iso-fetch', 'job=' + jobId + ' ' + pct + '% ' + Math.round(received/1e6) + '/' + Math.round(total/1e6) + ' MB');
+            }
+        });
+        r.data.on('error', e => {
+            isoJobs[jobId].status = 'error';
+            isoJobs[jobId].err = e.message;
+            try { fs.unlinkSync(tmp); } catch (_) {}
+            log('iso-fetch', 'job=' + jobId + ' STREAM ERR ' + e.message);
+        });
+        r.data.pipe(w);
+        w.on('close', () => {
+            if (isoJobs[jobId].status === 'error') return;
+            try {
+                fs.renameSync(tmp, dst);
+                isoJobs[jobId].status = 'done';
+                isoJobs[jobId].filename = path.basename(dst);
+                log('iso-fetch', 'job=' + jobId + ' OK ' + path.basename(dst) + ' ' + received + 'B in ' + ((Date.now() - startTs)/1000).toFixed(1) + 's');
+            } catch (e) {
+                isoJobs[jobId].status = 'error';
+                isoJobs[jobId].err = 'rename fail: ' + e.message;
+                log('iso-fetch', 'job=' + jobId + ' RENAME FAIL ' + e.message);
+            }
+        });
+    }).catch(e => {
+        isoJobs[jobId].status = 'error';
+        isoJobs[jobId].err = e.message;
+        try { fs.unlinkSync(tmp); } catch (_) {}
+        log('iso-fetch', 'job=' + jobId + ' AXIOS FAIL ' + e.message);
+    });
+});
+app.get('/modder/dev-iso-from-url/:jobId', (req, res) => {
+    const j = isoJobs[safeId(req.params.jobId)];
+    if (!j) return res.status(404).json({ ok: false, error: 'unknown job' });
+    res.json({ ok: true, job: j });
+});
+
 app.post('/modder/dev-fixture', express.json({ limit: '8mb' }), (req, res) => {
     const b = req.body || {};
     const rawName = safeFilename(b.filename || 'fixture.dat', 60);
