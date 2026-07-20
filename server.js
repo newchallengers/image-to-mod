@@ -85,6 +85,57 @@ const GEMINI_KEY = readKey(CFG.geminiKeyFile);
 if (!MESHY_KEY)  console.warn('[warn] no Meshy key at ' + CFG.meshyKeyFile);
 if (!GEMINI_KEY) console.warn('[warn] no Gemini key at ' + CFG.geminiKeyFile);
 
+// ─── Promo codes ─────────────────────────────────────────────────────
+// Server-side allowlist of shareable codes that let a caller consume
+// N free /modder/generate runs (which are the paid step — Meshy + Gemini).
+// Codes are NEVER embedded in the frontend or repo; they live in a
+// deploy-only file. Format:
+//   { "SOMEPHRASE": { "remaining": 5 }, ... }
+// Case-insensitive. Consumption count is persisted separately so hot
+// edits to the allowlist don't reset usage. Absent file = no free
+// generates; the endpoint returns 402 with a friendly message.
+const PROMO_CODES_FILE = process.env.PROMO_CODES_FILE
+    || path.join(os.homedir(), '.config/modder-promo-codes.json');
+const PROMO_USED_PATH  = path.join(dirs.state, 'promo-used.json');
+let promoAllowlist = {};   // { "CODE": { remaining: N } }
+let promoUsed      = {};   // { "CODE": N }
+function loadPromoAllowlist() {
+    try {
+        const raw = JSON.parse(fs.readFileSync(PROMO_CODES_FILE, 'utf8'));
+        const norm = {};
+        for (const k of Object.keys(raw)) norm[k.trim().toUpperCase()] = raw[k];
+        promoAllowlist = norm;
+        console.log('[promo] loaded ' + Object.keys(norm).length + ' code(s) from ' + PROMO_CODES_FILE);
+    } catch (e) { promoAllowlist = {}; if (e.code !== 'ENOENT') console.warn('[promo] load fail: ' + e.message); }
+}
+function loadPromoUsed() {
+    try { promoUsed = JSON.parse(fs.readFileSync(PROMO_USED_PATH, 'utf8')) || {}; }
+    catch (_) { promoUsed = {}; }
+}
+function savePromoUsed() {
+    try { fs.writeFileSync(PROMO_USED_PATH, JSON.stringify(promoUsed, null, 2)); }
+    catch (e) { console.warn('[promo] save used fail: ' + e.message); }
+}
+loadPromoAllowlist();
+loadPromoUsed();
+function promoNormalize(code) { return String(code || '').trim().toUpperCase(); }
+function promoRemaining(code) {
+    const c = promoNormalize(code);
+    if (!promoAllowlist[c]) return null;   // unknown code
+    const cap = Math.max(0, parseInt(promoAllowlist[c].remaining || 0, 10));
+    const used = Math.max(0, parseInt(promoUsed[c] || 0, 10));
+    return Math.max(0, cap - used);
+}
+function promoConsume(code) {
+    const c = promoNormalize(code);
+    if (!promoAllowlist[c]) return false;
+    if (promoRemaining(c) <= 0) return false;
+    promoUsed[c] = (promoUsed[c] || 0) + 1;
+    savePromoUsed();
+    console.log('[promo] consumed 1 from ' + c + ' (used=' + promoUsed[c] + ')');
+    return true;
+}
+
 // ─── Logging ─────────────────────────────────────────────────────────
 const LOG_MAX = 400;
 const ringBuf = [];
@@ -250,7 +301,7 @@ const app = express();
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Promo-Code');
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
 });
@@ -269,7 +320,22 @@ app.use('/public/mods',    express.static(dirs.mods));
 app.post('/modder/generate', express.json({ limit: '8mb' }), async (req, res) => {
     try {
         if (!MESHY_KEY || !GEMINI_KEY) return res.status(503).json({ ok: false, error: 'server not configured' });
-        const dataUrl = String((req.body && req.body.image) || '');
+        // Promo gate — /generate is the paid step (Meshy + Gemini).
+        // Client sends header X-Promo-Code (or body.promo_code) with a
+        // valid, un-exhausted code. Consume one credit atomically before
+        // any external API call; if it fails downstream we accept the
+        // small cost of a wasted credit over the racier alternative.
+        const promoCode = req.header('X-Promo-Code') || (req.body && req.body.promo_code) || '';
+        const rem = promoRemaining(promoCode);
+        if (rem === null || rem <= 0) {
+            return res.status(402).json({ ok: false, error: 'promo_required',
+                message: 'Enter a valid promo code (FREE MODS LEFT: 0).' });
+        }
+        if (!promoConsume(promoCode)) {
+            return res.status(402).json({ ok: false, error: 'promo_exhausted',
+                message: 'That promo code just ran out.' });
+        }
+        const dataUrl = String((req.body && (req.body.image || req.body.image_data_url)) || '');
         const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/.exec(dataUrl);
         if (!m) return res.status(400).json({ ok: false, error: 'body.image must be a base64 data URL (image/png|jpeg|webp)' });
         const inputBytes = Buffer.from(m[2], 'base64');
@@ -578,7 +644,18 @@ app.get('/modder/health', (req, res) => {
         hsdcli_dll: fs.existsSync(CFG.hsdcliDll),
         dotnet: fs.existsSync(CFG.dotnet),
         storage_root: CFG.storageRoot,
+        promo_codes_loaded: Object.keys(promoAllowlist).length,
     });
+});
+
+// Non-consuming promo check for the frontend. Body: { code }
+// Response: { ok: true, remaining: N } or { ok: false, remaining: 0, error }
+app.post('/modder/promo/check', express.json({ limit: '2kb' }), (req, res) => {
+    const code = (req.body && req.body.code) || '';
+    const rem = promoRemaining(code);
+    if (rem === null) return res.json({ ok: false, remaining: 0, error: 'invalid' });
+    if (rem <= 0)     return res.json({ ok: false, remaining: 0, error: 'exhausted' });
+    res.json({ ok: true, remaining: rem });
 });
 
 // ─── Start ───────────────────────────────────────────────────────────

@@ -275,6 +275,43 @@
             text-shadow: 0 2px 0 rgba(0,0,0,.5), 0 0 8px rgba(0,0,0,.3);
         }
         .step-label.pipe, .step-label.coin, .step-label.done { color: #fff; }
+        /* Tiny quota indicator under the step button. Deliberately styled
+           to look like passive info, NOT a link. Clicking it swaps in the
+           promo-code input — a hidden dev door for whitelisted testers.
+           No pointer cursor, no underline, muted color. */
+        .free-mods-left {
+            font-family: 'Impact', system-ui, sans-serif;
+            font-size: 0.72rem;
+            letter-spacing: 1.5px;
+            color: rgba(255,255,255,.55);
+            text-transform: uppercase;
+            text-align: left;
+            width: 160px;
+            padding-top: 4px;
+            padding-left: 4px;
+            text-shadow: 0 1px 2px rgba(0,0,0,.6);
+            cursor: default;
+            user-select: none;
+        }
+        .free-mods-left.have { color: #ffcf3c; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+        .free-mods-left input {
+            font: inherit; letter-spacing: 1.5px;
+            width: 100%; box-sizing: border-box;
+            background: rgba(0,0,0,.55);
+            border: 1px solid rgba(255,255,255,.35);
+            color: #fff;
+            padding: 3px 6px;
+            text-transform: uppercase;
+            outline: none;
+        }
+        .free-mods-left input:focus { border-color: #ffcf3c; }
+        .free-mods-left.bad { color: #ff6b6b; }
+        @keyframes promo-shake {
+            0%,100% { transform: translateX(0); }
+            25%     { transform: translateX(-4px); }
+            75%     { transform: translateX(4px); }
+        }
+        .free-mods-left.bad { animation: promo-shake 0.35s ease; }
     </style>
 </head>
 <body>
@@ -289,6 +326,10 @@
             <div class="menu">
                 <div class="step-label" id="step-label">Step 1</div>
                 <button class="btn" id="step-btn" onclick="window.stepAction()">Upload Image</button>
+                <div class="free-mods-left" id="free-mods"
+                     onclick="window.promoStart()"
+                     title=""
+                     aria-label="Free mods remaining">FREE MODS LEFT: 0</div>
             </div>
             <div id="canvas-container">
                 <div id="avatar-loading" aria-live="polite">
@@ -840,6 +881,83 @@
         }
         setStep(1);
 
+        /* Promo-code UI state. Server holds the allowlist; we just cache
+           the accepted code in localStorage and mirror the remaining count
+           into the little label under the button. Field name is deliberately
+           obscure to avoid inviting brute-force. */
+        let _promoCode = null;
+        try { _promoCode = localStorage.getItem('modder.promo') || null; } catch (_) {}
+        function _paintFreeMods(n) {
+            const el = document.getElementById('free-mods');
+            if (!el) return;
+            el.classList.remove('bad');
+            if (typeof n === 'number' && n > 0) {
+                el.classList.add('have');
+                el.textContent = 'FREE MODS LEFT: ' + n;
+            } else {
+                el.classList.remove('have');
+                el.textContent = 'FREE MODS LEFT: 0';
+            }
+        }
+        async function _promoCheck(code) {
+            try {
+                const r = await fetch(API + '/modder/promo/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code }),
+                });
+                return await r.json();
+            } catch (_) { return { ok: false }; }
+        }
+        if (_promoCode) {
+            _promoCheck(_promoCode).then(j => {
+                if (j.ok) _paintFreeMods(j.remaining);
+                else { _promoCode = null;
+                       try { localStorage.removeItem('modder.promo'); } catch (_) {}
+                       _paintFreeMods(0); }
+            });
+        } else _paintFreeMods(0);
+        window.promoStart = function () {
+            const el = document.getElementById('free-mods');
+            if (!el || el.querySelector('input')) return;
+            const prev = el.textContent;
+            el.innerHTML = '';
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.placeholder = 'Enter PROMO Code...';
+            inp.spellcheck = false;
+            inp.autocapitalize = 'characters';
+            inp.autocomplete = 'off';
+            el.appendChild(inp);
+            inp.focus();
+            let finished = false;
+            const finish = async (commit) => {
+                if (finished) return;
+                finished = true;
+                const raw = (inp.value || '').trim();
+                if (!commit || !raw) { el.textContent = prev; return; }
+                const j = await _promoCheck(raw);
+                if (j && j.ok && j.remaining > 0) {
+                    _promoCode = raw.toUpperCase();
+                    try { localStorage.setItem('modder.promo', _promoCode); } catch (_) {}
+                    _paintFreeMods(j.remaining);
+                } else {
+                    el.classList.add('bad');
+                    el.textContent = 'INVALID CODE';
+                    setTimeout(() => { el.classList.remove('bad'); _paintFreeMods(_promoCode ? -1 : 0); }, 1200);
+                    /* If a previously-good code was cached, re-check it so the
+                       label doesn't lie about remaining. */
+                    if (_promoCode) _promoCheck(_promoCode).then(k =>
+                        _paintFreeMods(k.ok ? k.remaining : 0));
+                }
+            };
+            inp.addEventListener('keydown', e => {
+                if (e.key === 'Enter')   { e.preventDefault(); finish(true);  }
+                if (e.key === 'Escape')  { e.preventDefault(); finish(false); }
+            });
+            inp.addEventListener('blur', () => finish(true));
+        };
+
         window.stepAction = function () {
             const btn = document.getElementById('step-btn');
             const label = document.getElementById('step-label').textContent;
@@ -862,14 +980,26 @@
             setStep('processing');
             let taskId;
             try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (_promoCode) headers['X-Promo-Code'] = _promoCode;
                 const r = await fetch(API + '/modder/generate', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: JSON.stringify({ image_data_url: dataUrl }),
                 });
                 const j = await r.json();
+                if (r.status === 402) {
+                    status('This build is invite-only — click "FREE MODS LEFT" to enter a promo code.', 0);
+                    statusHide(6000);
+                    setStep(1);
+                    _paintFreeMods(0);
+                    return;
+                }
                 if (!j.ok) throw new Error(j.error || 'generate failed');
                 taskId = j.task_id;
+                /* Refresh remaining count after a successful consume. */
+                if (_promoCode) _promoCheck(_promoCode).then(k =>
+                    _paintFreeMods(k.ok ? k.remaining : 0));
             } catch (err) {
                 status('Upload failed: ' + err.message, 0);
                 statusHide(4000);
